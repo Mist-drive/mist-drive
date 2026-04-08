@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { clearSession, getUser } from './lib/api'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from './components/LoadingBar'
@@ -19,15 +19,19 @@ function Background() {
 function Nav() {
   const u = getUser()
   const nav = useNavigate()
+  const loc = useLocation()
   if (!u) return null
+  const activeStyle = { color: 'var(--text-primary)' }
   return (
     <div className="navbar">
       <div className="logo">
         <span className="logo-dot" />
         <span className="logo-text">MIST&nbsp;DRIVE</span>
       </div>
-      <a href="/files">Files</a>
-      {u.role === 'admin' && <a href="/admin">Admin</a>}
+      <a href="/files" style={loc.pathname.startsWith('/files') ? activeStyle : undefined}>Files</a>
+      {u.role === 'admin' && (
+        <a href="/admin" style={loc.pathname.startsWith('/admin') ? activeStyle : undefined}>Admin</a>
+      )}
       <div className="spacer" />
       <span className="muted">{u.login}</span>
       <button className="ghost" onClick={() => { clearSession(); nav('/login') }}>Logout</button>

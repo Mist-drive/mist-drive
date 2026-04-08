@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ObjectInfo } from '../lib/api'
+import { api, getUser, ObjectInfo, setSession, getToken, PublicUser } from '../lib/api'
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
 
@@ -108,6 +108,8 @@ function sortedChildren(n: TreeNode): TreeNode[] {
 
 export default function Files() {
   const [files, setFiles] = useState<ObjectInfo[]>([])
+  const [me, setMe] = useState<PublicUser | null>(getUser())
+  const [recomputing, setRecomputing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   // Only tracks files currently being uploaded. Finished / errored ones
   // are removed from the map so the panel stays clean.
@@ -138,6 +140,25 @@ export default function Files() {
     const t = setInterval(() => setTick((n) => n + 1), 500)
     return () => clearInterval(t)
   }, [active])
+
+  // Warn on tab close / reload / navigation while uploads are in
+  // flight. Downloads are fine — once the browser hits the presigned
+  // URL the transfer is independent of our tab. For uploads the bytes
+  // flow from THIS tab's memory, so leaving kills them mid-part.
+  useEffect(() => {
+    const busy = Object.keys(active).length > 0 || queued > 0
+    if (!busy) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Modern browsers ignore the custom string and show their own
+      // generic prompt, but returnValue must be set for the prompt to
+      // actually appear in Chrome/Edge.
+      e.returnValue = ''
+      return ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [active, queued])
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
@@ -145,10 +166,27 @@ export default function Files() {
     setExpanded(e => ({ ...e, [path]: !e[path] }))
 
   const refresh = async () => {
-    try { setFiles(await api.listFiles()) }
-    catch (e: any) { setErr(e.message) }
+    try {
+      const [list, u] = await Promise.all([api.listFiles(), api.me()])
+      setFiles(list)
+      setMe(u)
+      const tok = getToken()
+      if (tok) setSession(tok, u)
+    } catch (e: any) { setErr(e.message) }
   }
   useEffect(() => { refresh() }, [])
+
+  const onRecompute = async () => {
+    setRecomputing(true)
+    try {
+      await api.recomputeUsage()
+      await refresh()
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setRecomputing(false)
+    }
+  }
 
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files
@@ -290,6 +328,19 @@ export default function Files() {
     return fmtEta((globalTotal - globalLoaded) / speed)
   })()
 
+  // File / folder counts across the full (unfiltered) listing — shown
+  // in the bottom usage bar. Folders are the distinct non-leaf path
+  // prefixes; files are just files.length.
+  const folderSet = new Set<string>()
+  for (const f of files) {
+    const parts = f.key.split('/').filter(Boolean)
+    for (let i = 1; i < parts.length; i++) {
+      folderSet.add(parts.slice(0, i).join('/'))
+    }
+  }
+  const totalFiles = files.length
+  const totalFolders = folderSet.size
+
   // Client-side search: case-insensitive substring match on the full
   // key. All the data is already in memory (the full listing is tiny —
   // a few hundred KB gzipped even for GBs of files) so there's no
@@ -316,37 +367,22 @@ export default function Files() {
 
   return (
     <div>
-      <h2>Files</h2>
-      <div className="card">
-        <div className="row">
-          <label style={{ margin: 0 }}>
-            <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
-              Upload files
-            </button>
-            <input
-              ref={fileInput}
-              type="file"
-              multiple
-              onChange={onPick}
-              style={{ display: 'none' }}
-            />
-          </label>
-          <label style={{ margin: 0 }}>
-            <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>
-              Upload folder
-            </button>
-            <input
-              ref={folderInput}
-              type="file"
-              multiple
-              webkitdirectory=""
-              directory=""
-              onChange={onPick}
-              style={{ display: 'none' }}
-            />
-          </label>
-        </div>
-      </div>
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        onChange={onPick}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={folderInput}
+        type="file"
+        multiple
+        webkitdirectory=""
+        directory=""
+        onChange={onPick}
+        style={{ display: 'none' }}
+      />
       {(activeList.length > 0 || queued > 0) && (
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '.8rem', gap: '.8rem' }}>
@@ -396,7 +432,7 @@ export default function Files() {
           ))}
         </div>
       )}
-      {err && <p className="error">{err}</p>}
+      {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
@@ -412,11 +448,51 @@ export default function Files() {
         )}
       </div>
       <table>
-        <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+        <thead><tr>
+          <th>Name</th>
+          <th>Size</th>
+          <th>Modified</th>
+          <th>
+            <div className="row" style={{ gap: '.5rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+              <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
+                Upload files
+              </button>
+              <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>
+                Upload folder
+              </button>
+            </div>
+          </th>
+        </tr></thead>
         <tbody>
           {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder)}
         </tbody>
       </table>
+      {me && (
+        <div
+          className="muted"
+          style={{
+            marginTop: '1rem',
+            textAlign: 'center',
+            fontSize: '0.85rem',
+          }}
+        >
+          {fmt(me.usedBytes)} / {fmt(me.quotaBytes)} used
+          {' '}({totalFiles} file{totalFiles === 1 ? '' : 's'},{' '}
+          {totalFolders} folder{totalFolders === 1 ? '' : 's'})
+          {' · '}
+          <a
+            href="#"
+            onClick={(e) => { e.preventDefault(); if (!recomputing) onRecompute() }}
+            style={{
+              color: 'var(--accent-blue)',
+              opacity: recomputing ? 0.5 : 1,
+              cursor: recomputing ? 'default' : 'pointer',
+            }}
+          >
+            {recomputing ? 'recomputing…' : 'recompute usage'}
+          </a>
+        </div>
+      )}
     </div>
   )
 }
@@ -434,6 +510,23 @@ function renderTree(
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
     const indent = { paddingLeft: `${depth * 1.2 + 0.4}rem` }
+    const iconBtn = { padding: '.3rem .55rem', fontSize: '0.95rem', lineHeight: 1 }
+    const actionsTd = (
+      <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+        <button
+          className="ghost"
+          title="Download"
+          style={iconBtn}
+          onClick={(e) => { e.stopPropagation(); c.isDir ? onDownloadFolder(c.path) : onDownload(c.path) }}
+        >⬇</button>
+        <button
+          className="danger"
+          title="Delete"
+          style={iconBtn}
+          onClick={(e) => { e.stopPropagation(); c.isDir ? onDeleteFolder(c.path) : onDelete(c.path) }}
+        >✕</button>
+      </div>
+    )
     if (c.isDir) {
       const isOpen = !!expanded[c.path]
       rows.push(
@@ -442,24 +535,12 @@ function renderTree(
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}>
               {isOpen ? '▾' : '▸'}
             </span>
-            <strong>{c.name}/</strong>
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>{isOpen ? '📂' : '📁'}</span>
+            <strong>{c.name}</strong>
           </td>
           <td className="muted">{fmt(c.size)}</td>
           <td className="muted">—</td>
-          <td className="row">
-            <button
-              className="ghost"
-              onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}
-            >
-              Download
-            </button>
-            <button
-              className="danger"
-              onClick={(e) => { e.stopPropagation(); onDeleteFolder(c.path) }}
-            >
-              Delete
-            </button>
-          </td>
+          <td>{actionsTd}</td>
         </tr>,
       )
       if (isOpen) {
@@ -469,17 +550,15 @@ function renderTree(
       rows.push(
         <tr key={`f:${c.path}`}>
           <td style={indent}>
-            <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}>·</span>
+            <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}></span>
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>📄</span>
             {c.name}
           </td>
           <td>{fmt(c.size)}</td>
           <td className="muted">
             {c.lastModified ? new Date(c.lastModified).toLocaleString() : ''}
           </td>
-          <td className="row">
-            <button className="ghost" onClick={() => onDownload(c.path)}>Download</button>
-            <button className="danger" onClick={() => onDelete(c.path)}>Delete</button>
-          </td>
+          <td>{actionsTd}</td>
         </tr>,
       )
     }

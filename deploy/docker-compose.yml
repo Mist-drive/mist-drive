@@ -99,6 +99,15 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BROWSER: ${MINIO_BROWSER}
+      # Transparent server-side compression. "*" wildcards match every
+      # object; MinIO internally skips already-compressed formats (zip,
+      # mp4, jpg, gz, …) so we don't waste CPU on them. Compressed
+      # objects still report their ORIGINAL (uncompressed) size via
+      # HEAD/GET, so usedBytes quota accounting stays consistent with
+      # what the user actually uploaded.
+      MINIO_COMPRESSION_ENABLE: "on"
+      MINIO_COMPRESSION_EXTENSIONS: "*"
+      MINIO_COMPRESSION_MIME_TYPES: "*"
     volumes:
       - ./data/minio:/data
     # Exposed on the host ONLY so the browser can PUT presigned part URLs

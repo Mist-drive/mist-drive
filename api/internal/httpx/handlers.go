@@ -42,6 +42,7 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/upload/init", s.uploadInit)
 	files.Post("/upload/complete", s.uploadComplete)
 	files.Post("/upload/abort", s.uploadAbort)
+	files.Post("/recompute-usage", s.recomputeUsage)
 
 	admin := api.Group("/admin", AdminOnly)
 	admin.Get("/users", s.adminListUsers)
@@ -146,10 +147,46 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 		count = 1
 	}
 
-	// Atomic subtract — same reasoning as uploadComplete: avoid racing
-	// concurrent deletes against each other (and against completes).
-	_ = s.Users.AddUsedBytes(u.ID, -freed)
+	// Recompute usedBytes authoritatively from S3 after the delete.
+	// We used to do `AddUsedBytes(-freed)` but that drifts over time
+	// (crashes mid-upload, server-side compression reporting, stray
+	// multipart parts...) and the user can end up seeing phantom GBs
+	// after emptying their bucket. A single ListObjects on the user's
+	// bucket is cheap and keeps the counter honest.
+	if remaining, lerr := s.S3.ListObjects(c.Context(), u.Bucket(), ""); lerr == nil {
+		var total int64
+		for _, o := range remaining {
+			total += o.Size
+		}
+		_ = s.Users.SetUsedBytes(u.ID, total)
+	} else {
+		// Fallback: best-effort subtract so we at least move in the
+		// right direction if the listing failed.
+		_ = s.Users.AddUsedBytes(u.ID, -freed)
+	}
 	return c.JSON(fiber.Map{"ok": true, "count": count, "freed": freed})
+}
+
+// recomputeUsage re-derives the caller's usedBytes from an authoritative
+// S3 listing. Useful after enabling compression, recovering from a
+// crash, or any time the counter drifts from reality.
+func (s *Server) recomputeUsage(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "no user")
+	}
+	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), "")
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	var total int64
+	for _, o := range objs {
+		total += o.Size
+	}
+	if err := s.Users.SetUsedBytes(u.ID, total); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(fiber.Map{"ok": true, "usedBytes": total, "count": len(objs)})
 }
 
 func (s *Server) download(c *fiber.Ctx) error {

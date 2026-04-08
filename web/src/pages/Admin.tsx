@@ -52,7 +52,6 @@ export default function Admin() {
 
   return (
     <div>
-      <h2>Admin</h2>
       <form className="card" onSubmit={create}>
         <h3>Create user</h3>
         <div className="row">

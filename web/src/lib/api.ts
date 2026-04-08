@@ -100,6 +100,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ uploadId, parts }),
     }),
+  recomputeUsage: () =>
+    req<{ ok: boolean; usedBytes: number; count: number }>(
+      '/api/files/recompute-usage',
+      { method: 'POST' },
+    ),
   uploadAbort: (uploadId: string) =>
     req<{ ok: boolean }>('/api/files/upload/abort', {
       method: 'POST',

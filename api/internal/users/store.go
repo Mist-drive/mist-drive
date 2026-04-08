@@ -111,6 +111,23 @@ func (s *Store) AddUsedBytes(id string, delta int64) error {
 	return s.writeLocked(u)
 }
 
+// SetUsedBytes overwrites the user's UsedBytes with an authoritative
+// value (e.g. recomputed from a full S3 listing). Same locking rules as
+// AddUsedBytes — must not race concurrent completes/deletes.
+func (s *Store) SetUsedBytes(id string, v int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if v < 0 {
+		v = 0
+	}
+	u.UsedBytes = v
+	return s.writeLocked(u)
+}
+
 func (s *Store) Update(u *User) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
