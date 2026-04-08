@@ -1,0 +1,8 @@
+api/bin
+api/tmp
+web/node_modules
+web/dist
+deploy/.env
+deploy/data
+deploy/traefik/certs
+.DS_Store

@@ -1,0 +1,9 @@
+tls:
+  certificates:
+    - certFile: /certs/mist.crt
+      keyFile: /certs/mist.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/mist.crt
+        keyFile: /certs/mist.key
