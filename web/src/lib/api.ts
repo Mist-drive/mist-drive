@@ -46,6 +46,55 @@ export function onLoading(l: (n: number) => void): () => void {
   return () => { _loadingListeners.delete(l) }
 }
 
+// Reconnecting WebSocket client for server-pushed events. We only use
+// it as a "refresh your view" signal — the server never sends deltas,
+// just a tiny `{type: "files-changed"}` envelope, and subscribers
+// react by re-fetching authoritative state. That way the ws channel
+// and the store can never drift apart.
+//
+// Backoff is capped at 10s so a flaky network doesn't pin the tab at
+// 100% reconnecting CPU. A hidden tab pauses reconnects until it's
+// visible again to avoid wasting a socket on backgrounded tabs.
+export type EventMsg = { type: 'files-changed' }
+
+const _eventListeners = new Set<(e: EventMsg) => void>()
+export function onEvent(l: (e: EventMsg) => void): () => void {
+  _eventListeners.add(l)
+  ensureWS()
+  return () => { _eventListeners.delete(l) }
+}
+
+let _ws: WebSocket | null = null
+let _wsBackoff = 500
+function ensureWS() {
+  if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return
+  const tok = getToken()
+  if (!tok) return
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(tok)}`
+  const ws = new WebSocket(url)
+  _ws = ws
+  ws.onopen = () => { _wsBackoff = 500 }
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data) as EventMsg
+      _eventListeners.forEach((l) => l(msg))
+    } catch { /* ignore */ }
+  }
+  ws.onclose = () => {
+    _ws = null
+    // Reconnect with capped exponential backoff. Skip while the tab
+    // is hidden — we'll retry on visibilitychange.
+    if (document.visibilityState === 'hidden') return
+    setTimeout(ensureWS, _wsBackoff)
+    _wsBackoff = Math.min(_wsBackoff * 2, 10_000)
+  }
+  ws.onerror = () => { ws.close() }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') ensureWS()
+})
+
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')

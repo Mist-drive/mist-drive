@@ -10,7 +10,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/api ./cmd/server
 
 # Runtime stage
-FROM alpine:3.20
+FROM alpine:3.21
 RUN adduser -D -u 1000 appuser \
   && apk add --no-cache curl ca-certificates tzdata
 

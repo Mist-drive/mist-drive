@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, getUser, ObjectInfo, setSession, getToken, PublicUser } from '../lib/api'
+import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent } from '../lib/api'
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
 
@@ -175,6 +175,14 @@ export default function Files() {
     } catch (e: any) { setErr(e.message) }
   }
   useEffect(() => { refresh() }, [])
+
+  // Subscribe to server-pushed "files-changed" events so deletes and
+  // uploads triggered from other tabs / the desktop app appear here
+  // without the user hitting refresh. We re-fetch on any message — the
+  // server intentionally doesn't send deltas.
+  useEffect(() => {
+    return onEvent(() => { refresh() })
+  }, [])
 
   const onRecompute = async () => {
     setRecomputing(true)
@@ -449,7 +457,19 @@ export default function Files() {
       </div>
       <table>
         <thead><tr>
-          <th>Name</th>
+          <th>
+            Name
+            {/* Collapse-all — intentionally no expand-all (a blind
+                expand on a large bucket would render thousands of
+                rows, whereas collapsing is what users actually want). */}
+            <button
+              type="button"
+              className="ghost"
+              title="Collapse all folders"
+              onClick={() => setExpanded({})}
+              style={{ padding: '.1rem .4rem', marginLeft: '.5rem', fontSize: '0.8rem', lineHeight: 1 }}
+            >⊟</button>
+          </th>
           <th>Size</th>
           <th>Modified</th>
           <th>

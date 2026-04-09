@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/websocket/v2"
 	"github.com/google/uuid"
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
+	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -25,6 +27,7 @@ type Server struct {
 	S3           *s3x.Client
 	Uploads      *uploads.Store
 	Reservations *quota.Reservations
+	Events       *events.Hub
 }
 
 func (s *Server) Register(app *fiber.App) {
@@ -43,6 +46,19 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/upload/complete", s.uploadComplete)
 	files.Post("/upload/abort", s.uploadAbort)
 	files.Post("/recompute-usage", s.recomputeUsage)
+
+	// WebSocket for push notifications. The JWT middleware already ran
+	// when the route matched (ws handshakes hit /api/ws), so `UID(c)`
+	// is populated. We copy it into a plain-string local key that the
+	// ws handler can read — the typed ctxKey constant is unexported and
+	// websocket.Conn doesn't share the fiber.Ctx type.
+	api.Get("/ws", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			c.Locals("uid", UID(c))
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	}, websocket.New(s.wsHandler))
 
 	admin := api.Group("/admin", AdminOnly)
 	admin.Get("/users", s.adminListUsers)
@@ -164,7 +180,56 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 		// right direction if the listing failed.
 		_ = s.Users.AddUsedBytes(u.ID, -freed)
 	}
+	s.publishChange(u.ID)
 	return c.JSON(fiber.Map{"ok": true, "count": count, "freed": freed})
+}
+
+// wsHandler holds a websocket open for the caller's user id and
+// pushes every event the hub publishes for them. Auth already ran via
+// ?token= in the URL (browsers can't set Authorization headers on the
+// handshake), so we just read the uid back out of fiber locals.
+func (s *Server) wsHandler(c *websocket.Conn) {
+	uid, _ := c.Locals("uid").(string)
+	if uid == "" {
+		return
+	}
+	ch, unsub := s.Events.Subscribe(uid)
+	defer unsub()
+
+	// Drain inbound frames in a goroutine so client-side closes unblock
+	// the write loop. This is a one-way push channel; we don't care
+	// what the client sends.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-done:
+			return
+		case e, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := c.WriteJSON(e); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// publishChange is the one-liner every mutating handler calls after
+// a successful write. Centralised so we don't forget on a code path.
+func (s *Server) publishChange(uid string) {
+	if s.Events != nil {
+		s.Events.Publish(uid, events.Event{Type: events.FilesChanged})
+	}
 }
 
 // recomputeUsage re-derives the caller's usedBytes from an authoritative
@@ -371,6 +436,7 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	}
 	s.Reservations.Release(u.ID, st.Size)
 	_ = s.Uploads.Delete(u.ID, r.UploadID)
+	s.publishChange(u.ID)
 	return c.JSON(fiber.Map{"ok": true, "size": size})
 }
 

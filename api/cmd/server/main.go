@@ -11,6 +11,7 @@ import (
 
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
+	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/logger"
 	"github.com/yann/mist-drive/api/internal/quota"
@@ -72,6 +73,7 @@ func main() {
 		Cfg: cfg, Users: userStore, S3: s3c,
 		Uploads:      uploadStore,
 		Reservations: quota.New(),
+		Events:       events.NewHub(),
 	}
 	srv.Register(app)
 

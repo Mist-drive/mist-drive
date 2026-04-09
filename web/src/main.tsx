@@ -10,10 +10,35 @@ if (location.protocol === 'http:' && location.hostname !== 'localhost' && locati
   throw new Error('HTTPS required')
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </React.StrictMode>,
-)
+// Single-sign-on handoff from the desktop app. When the user clicks
+// "Web ↗" in the desktop navbar, Wails opens the browser with
+// `#token=<jwt>` appended. We consume it here, store the session, then
+// scrub the fragment so the token never ends up in history or a share.
+// If the token is invalid the app simply lands on /login as usual.
+if (location.hash.startsWith('#token=')) {
+  const tok = decodeURIComponent(location.hash.slice('#token='.length))
+  history.replaceState(null, '', location.pathname + location.search)
+  if (tok) {
+    sessionStorage.setItem('mist.token', tok)
+    fetch('/api/me', { headers: { Authorization: 'Bearer ' + tok } })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((u) => sessionStorage.setItem('mist.user', JSON.stringify(u)))
+      .catch(() => sessionStorage.removeItem('mist.token'))
+      .finally(bootReact)
+  } else {
+    bootReact()
+  }
+} else {
+  bootReact()
+}
+
+function bootReact() {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </React.StrictMode>,
+  )
+}
+
