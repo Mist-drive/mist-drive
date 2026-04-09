@@ -118,6 +118,32 @@ func (c *Client) RemoveObject(ctx context.Context, bucket, key string) error {
 	return c.mc.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 }
 
+// RemoveObjects deletes every key in `keys` from `bucket` using MinIO's
+// batch delete API. Much faster than a per-key loop for folder deletes
+// (one request vs N). Individual per-key errors are collected and
+// returned as a joined error; partial success is still committed —
+// that matches the "we'll reconcile used bytes afterwards" model.
+func (c *Client) RemoveObjects(ctx context.Context, bucket string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	ch := make(chan minio.ObjectInfo, len(keys))
+	for _, k := range keys {
+		ch <- minio.ObjectInfo{Key: k}
+	}
+	close(ch)
+	errs := []string{}
+	for rerr := range c.mc.RemoveObjects(ctx, bucket, ch, minio.RemoveObjectsOptions{}) {
+		if rerr.Err != nil {
+			errs = append(errs, rerr.ObjectName+": "+rerr.Err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("remove objects: %s", errs[0])
+	}
+	return nil
+}
+
 // GetObject returns a streaming reader for the object. Caller must Close.
 // Used by the folder-zip handler; presigned GET is still preferred for
 // single-file downloads.

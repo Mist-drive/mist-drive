@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -144,8 +145,62 @@ func (a *App) ListFiles() ([]apiclient.ObjectInfo, error) {
 	return a.api.ListFiles()
 }
 
-func (a *App) DeleteFile(key string) error       { return a.api.DeleteFile(key) }
-func (a *App) DeleteFolder(prefix string) error  { return a.api.DeleteFolder(prefix) }
+// DeleteFile removes a file. If the key lives under an upload-enabled
+// sync folder, we delete the LOCAL copy and let the next reconcile pass
+// propagate the deletion to the remote — otherwise the engine would
+// just re-upload the file a few seconds later. For files outside any
+// sync folder we fall back to a direct API delete.
+func (a *App) DeleteFile(key string) error {
+	if f, rel, ok := a.findUploadingFolderForKey(key); ok {
+		local := filepath.Join(f.Local, filepath.FromSlash(rel))
+		if err := os.Remove(local); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove local: %w", err)
+		}
+		a.engine.Nudge()
+		return nil
+	}
+	return a.api.DeleteFile(key)
+}
+
+// DeleteFolder mirrors DeleteFile's logic for recursive prefix deletes.
+// An upload-enabled sync folder whose RemotePrefix matches (or is
+// contained by) the given prefix has its local tree wiped; otherwise
+// the delete is forwarded to the API.
+func (a *App) DeleteFolder(prefix string) error {
+	if f, rel, ok := a.findUploadingFolderForKey(prefix); ok {
+		local := filepath.Join(f.Local, filepath.FromSlash(rel))
+		if err := os.RemoveAll(local); err != nil {
+			return fmt.Errorf("remove local dir: %w", err)
+		}
+		a.engine.Nudge()
+		return nil
+	}
+	return a.api.DeleteFolder(prefix)
+}
+
+// findUploadingFolderForKey returns the sync folder whose RemotePrefix
+// is a prefix of `key`, provided that folder has Upload enabled (the
+// only mode where local is authoritative). The returned `rel` is the
+// key with the folder's prefix stripped, ready to be joined to Local.
+func (a *App) findUploadingFolderForKey(key string) (settings.SyncFolder, string, bool) {
+	key = strings.TrimPrefix(key, "/")
+	for _, f := range a.settings.Get().Folders {
+		if !f.Enabled || !f.Upload {
+			continue
+		}
+		p := strings.TrimSuffix(f.RemotePrefix, "/")
+		if p == "" {
+			return f, key, true
+		}
+		if key == p {
+			return f, "", true
+		}
+		if rel, ok := strings.CutPrefix(key, p+"/"); ok {
+			return f, rel, true
+		}
+	}
+	return settings.SyncFolder{}, "", false
+}
 
 // UploadFile opens a native file picker and uploads the selected file
 // under the given remote prefix (empty = root). Returns the remote key

@@ -118,6 +118,9 @@ export namespace sync {
 	    uploaded: number;
 	    downloaded: number;
 	    skipped: number;
+	    errors: number;
+	    totalUploaded: number;
+	    totalDownloaded: number;
 	    inFlight: string;
 	
 	    static createFrom(source: any = {}) {
@@ -132,6 +135,9 @@ export namespace sync {
 	        this.uploaded = source["uploaded"];
 	        this.downloaded = source["downloaded"];
 	        this.skipped = source["skipped"];
+	        this.errors = source["errors"];
+	        this.totalUploaded = source["totalUploaded"];
+	        this.totalDownloaded = source["totalDownloaded"];
 	        this.inFlight = source["inFlight"];
 	    }
 	

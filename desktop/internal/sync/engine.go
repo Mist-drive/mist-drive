@@ -8,16 +8,18 @@
 //   - No persistent index yet. The original plan called for a SQLite
 //     change-detection cache; for v1 we do full size-based compares on
 //     every pass. This is fine up to a few tens of thousands of files
-//     and keeps the code ~200 lines instead of ~800. The slot to add
-//     the index later is clearly marked in diff().
+//     and keeps the code ~250 lines instead of ~800. The slot to add
+//     the index later is marked with [index hook].
 //   - Conflict rule: local wins. The moment a file differs in size
 //     between local and remote we push the local copy — matches the
 //     "last-writer-wins, local beats remote on tie" rule from the plan.
 //   - fsnotify drives continuous reconciliation. Events are debounced
 //     (500ms) so a batch of writes coalesces into one pass. After a
 //     debounced burst we always re-reconcile the *whole* mapping; we
-//     don't try to route events to individual file handlers, which is
-//     what keeps the code simple.
+//     don't route events to individual file handlers, which is what
+//     keeps the code simple.
+//   - Per-file errors are logged and counted, not fatal. A single
+//     permission-denied should never stop the rest of a pass.
 package sync
 
 import (
@@ -35,20 +37,36 @@ import (
 	"mist-drive-desktop/internal/settings"
 )
 
+// API is the narrow slice of apiclient.Client the engine actually
+// uses. Declaring it here lets tests inject a fake without dragging in
+// an HTTP client.
+type API interface {
+	ListFiles() ([]apiclient.ObjectInfo, error)
+	UploadFile(localPath, remoteKey string, maxConcurrentParts int) error
+	DownloadFile(key, destPath string) error
+	DeleteFile(key string) error
+	SetUploadRateKBps(kbps int)
+}
+
 // Status is the snapshot of engine state the frontend polls (or
-// receives via events) to render the sync panel.
+// receives via events) to render the sync panel. Counters reset at
+// the start of each pass; TotalUploaded/TotalDownloaded are lifetime
+// numbers for the "activity since login" display.
 type Status struct {
-	Running      bool      `json:"running"`
-	LastPass     time.Time `json:"lastPass"`
-	LastError    string    `json:"lastError"`
-	Uploaded     int       `json:"uploaded"`
-	Downloaded   int       `json:"downloaded"`
-	Skipped      int       `json:"skipped"`
-	InFlight     string    `json:"inFlight"` // current file being transferred
+	Running         bool      `json:"running"`
+	LastPass        time.Time `json:"lastPass"`
+	LastError       string    `json:"lastError"`
+	Uploaded        int       `json:"uploaded"`
+	Downloaded      int       `json:"downloaded"`
+	Skipped         int       `json:"skipped"`
+	Errors          int       `json:"errors"`
+	TotalUploaded   int       `json:"totalUploaded"`
+	TotalDownloaded int       `json:"totalDownloaded"`
+	InFlight        string    `json:"inFlight"` // current file being transferred
 }
 
 type Engine struct {
-	api    *apiclient.Client
+	api    API
 	st     *settings.Store
 	logger func(string)
 
@@ -61,7 +79,7 @@ type Engine struct {
 	nudge chan struct{}
 }
 
-func New(api *apiclient.Client, st *settings.Store, log func(string)) *Engine {
+func New(api API, st *settings.Store, log func(string)) *Engine {
 	if log == nil {
 		log = func(string) {}
 	}
@@ -129,22 +147,21 @@ func (e *Engine) loop(ctx context.Context) {
 		e.mu.Unlock()
 	}()
 
-	folders := e.st.Get().Folders
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		e.setErr(fmt.Errorf("watcher: %w", err))
 		return
 	}
 	defer watcher.Close()
+	// watched tracks which roots currently have fsnotify subscriptions
+	// so we can diff against the live folder list on every pass. Adding
+	// a sync folder at runtime used to miss its watcher until the next
+	// app restart; now the reconcile loop notices and catches up.
+	watched := map[string]bool{}
+	e.syncWatchers(watcher, watched)
 
-	for _, f := range folders {
-		e.addRecursive(watcher, f.Local)
-	}
-
-	// Kick off an initial pass so users see activity immediately on Start.
 	e.reconcileAll(ctx)
 
-	// Debouncer: fsnotify bursts into reconcile at most every 500 ms.
 	var debounce *time.Timer
 	fire := make(chan struct{}, 1)
 	tick := time.NewTicker(30 * time.Second)
@@ -155,18 +172,19 @@ func (e *Engine) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			e.syncWatchers(watcher, watched)
 			e.reconcileAll(ctx)
 		case <-fire:
+			e.syncWatchers(watcher, watched)
 			e.reconcileAll(ctx)
 		case <-e.nudge:
+			e.syncWatchers(watcher, watched)
 			e.reconcileAll(ctx)
 		case ev, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
-			// Ignore the event payload beyond existence — we re-walk
-			// the whole mapping anyway. Just schedule a run.
-			_ = ev
+			_ = ev // we always re-walk the whole mapping
 			if debounce != nil {
 				debounce.Stop()
 			}
@@ -185,47 +203,77 @@ func (e *Engine) loop(ctx context.Context) {
 	}
 }
 
-// addRecursive walks `root` and subscribes fsnotify to every directory
-// inside it. fsnotify on Linux only notifies for directly-watched dirs,
-// so we have to walk once at startup. New subdirs created later are
-// caught by the reconcile loop and re-watched on the next pass (good
-// enough for v1 — power users with deeply nested new trees might miss
-// one tick, which the 30s idle pass backstops).
-func (e *Engine) addRecursive(w *fsnotify.Watcher, root string) {
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil {
+// syncWatchers reconciles the fsnotify subscription set against the
+// current list of sync folders. Runs before every reconcile pass so
+// folders added or removed while the engine is running are picked up
+// without a restart.
+func (e *Engine) syncWatchers(w *fsnotify.Watcher, watched map[string]bool) {
+	want := map[string]bool{}
+	for _, f := range e.st.Get().Folders {
+		want[f.Local] = true
+	}
+	// Remove stale roots.
+	for root := range watched {
+		if !want[root] {
+			_ = w.Remove(root)
+			delete(watched, root)
+		}
+	}
+	// Add new roots (walk subdirs — fsnotify on Linux only notifies
+	// directly-watched dirs).
+	for root := range want {
+		if watched[root] {
+			continue
+		}
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d == nil {
+				return nil
+			}
+			if d.IsDir() {
+				_ = w.Add(p)
+			}
 			return nil
-		}
-		if d.IsDir() {
-			_ = w.Add(path)
-		}
-		return nil
-	})
+		})
+		watched[root] = true
+	}
 }
 
+// reconcileAll runs one pass across every enabled folder. Remote
+// listing is done ONCE per pass and shared across folders: the
+// per-folder work is just a prefix filter on the same slice, saving
+// N−1 list calls when the user has multiple mappings.
 func (e *Engine) reconcileAll(ctx context.Context) {
 	s := e.st.Get()
-	// Apply upload rate limit from settings on each pass so changes
-	// take effect without a restart.
 	e.api.SetUploadRateKBps(s.MaxUploadRateKBps)
+
+	// Per-pass counters start fresh so the UI shows "this pass", not
+	// a lifetime accumulator that grows forever. Lifetime totals live
+	// in TotalUploaded/TotalDownloaded.
+	e.mu.Lock()
+	e.status.Uploaded = 0
+	e.status.Downloaded = 0
+	e.status.Skipped = 0
+	e.status.Errors = 0
+	e.status.LastError = ""
+	e.mu.Unlock()
+
+	remoteAll, err := e.api.ListFiles()
+	if err != nil {
+		e.setErr(fmt.Errorf("list remote: %w", err))
+		return
+	}
 
 	for _, f := range s.Folders {
 		if ctx.Err() != nil {
 			return
 		}
-		// Per-folder Enabled flag is the user-facing on/off switch.
-		// Both direction flags off = no-op pass (counts as skipped).
 		if !f.Enabled {
 			continue
 		}
-		if err := e.reconcileOne(ctx, f, f.Upload, f.Download); err != nil {
-			e.setErr(fmt.Errorf("%s: %w", f.Local, err))
-			return
-		}
+		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll)
 	}
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
-	e.status.LastError = ""
 	e.status.InFlight = ""
 	e.mu.Unlock()
 }
@@ -237,13 +285,10 @@ type localFile struct {
 
 // scanLocal walks the mapping root and returns every regular file keyed
 // by its relative path (forward-slash separated so it matches S3 keys).
+// Assumes the root already exists — the caller is responsible for
+// creating it (see reconcileOne).
 func scanLocal(root string) (map[string]localFile, error) {
 	out := map[string]localFile{}
-	if _, err := os.Stat(root); os.IsNotExist(err) {
-		if err := os.MkdirAll(root, 0o755); err != nil {
-			return nil, err
-		}
-	}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -266,35 +311,36 @@ func scanLocal(root string) (map[string]localFile, error) {
 	return out, err
 }
 
-// reconcileOne performs one full pass for a single mapping. The
-// upload/download booleans gate each direction independently so the
-// user can run upload-only (default), download-only, or bidirectional
-// from the settings screen without restarting the engine.
-func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUpload, doDownload bool) error {
+// reconcileOne performs one full pass for a single mapping. Per-file
+// errors are logged and counted but never abort the pass — a flaky
+// permission on one file should not stop the rest from syncing.
+func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUpload, doDownload bool, remoteAll []apiclient.ObjectInfo) {
+	if _, err := os.Stat(f.Local); os.IsNotExist(err) {
+		if err := os.MkdirAll(f.Local, 0o755); err != nil {
+			e.recordErr(fmt.Errorf("mkdir %s: %w", f.Local, err))
+			return
+		}
+	}
 	local, err := scanLocal(f.Local)
 	if err != nil {
-		return fmt.Errorf("scan local: %w", err)
+		e.recordErr(fmt.Errorf("scan %s: %w", f.Local, err))
+		return
 	}
 
-	remoteAll, err := e.api.ListFiles()
-	if err != nil {
-		return fmt.Errorf("list remote: %w", err)
-	}
-	// Filter to just the keys under this mapping's prefix and build a
-	// relative-path lookup mirror-image of `local`.
 	prefix := f.RemotePrefix
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 	remote := map[string]apiclient.ObjectInfo{}
 	for _, o := range remoteAll {
-		if prefix == "" || strings.HasPrefix(o.Key, prefix) {
-			rel := strings.TrimPrefix(o.Key, prefix)
-			if rel == "" {
-				continue
-			}
-			remote[rel] = o
+		if prefix != "" && !strings.HasPrefix(o.Key, prefix) {
+			continue
 		}
+		rel := strings.TrimPrefix(o.Key, prefix)
+		if rel == "" {
+			continue
+		}
+		remote[rel] = o
 	}
 
 	// Walk the union. --- [index hook] ---
@@ -306,28 +352,17 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 	for rel, lf := range local {
 		seen[rel] = true
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return
 		}
 		ro, ok := remote[rel]
-		if !ok {
-			// Local-only → upload (if upload direction is enabled).
-			if doUpload {
-				if err := e.upload(f, rel); err != nil {
-					return err
-				}
-			} else {
+		if !ok || ro.Size != lf.size {
+			// Local-only or size-mismatch → upload (if enabled).
+			if !doUpload {
 				e.bumpSkipped()
+				continue
 			}
-			continue
-		}
-		if ro.Size != lf.size {
-			// Differ → local wins, but only if we're allowed to push.
-			if doUpload {
-				if err := e.upload(f, rel); err != nil {
-					return err
-				}
-			} else {
-				e.bumpSkipped()
+			if err := e.upload(f, rel); err != nil {
+				e.recordErr(err)
 			}
 			continue
 		}
@@ -338,61 +373,97 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 			continue
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return
 		}
-		// Remote-only → download (if download direction is enabled).
-		if doDownload {
-			if err := e.download(f, rel); err != nil {
-				return err
+		// Upload-only mode treats the local folder as the source of
+		// truth: a file present remotely but missing locally means the
+		// user deleted it from their file manager, so we mirror that
+		// deletion to the remote. In bidirectional mode we can't tell
+		// a local delete apart from a new remote file without an
+		// index, so we fall back to downloading (safer default).
+		if doUpload && !doDownload {
+			if err := e.deleteRemote(f, rel); err != nil {
+				e.recordErr(err)
 			}
-		} else {
+			continue
+		}
+		if !doDownload {
 			e.bumpSkipped()
+			continue
+		}
+		if err := e.download(f, rel); err != nil {
+			e.recordErr(err)
 		}
 	}
-	return nil
+}
+
+// remoteKey joins a folder's remote prefix with a relative path,
+// handling the trailing-slash edge case. Extracted because upload()
+// and download() both need the exact same logic.
+func remoteKey(f settings.SyncFolder, rel string) string {
+	if f.RemotePrefix == "" {
+		return rel
+	}
+	return strings.TrimSuffix(f.RemotePrefix, "/") + "/" + rel
 }
 
 func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 	local := filepath.Join(f.Local, filepath.FromSlash(rel))
-	key := rel
-	if f.RemotePrefix != "" {
-		key = strings.TrimSuffix(f.RemotePrefix, "/") + "/" + rel
-	}
 	e.setInFlight("↑ " + rel)
 	s := e.st.Get()
-	if err := e.api.UploadFile(local, key, s.MaxConcurrentUploads); err != nil {
+	if err := e.api.UploadFile(local, remoteKey(f, rel), s.MaxConcurrentUploads); err != nil {
 		return fmt.Errorf("upload %s: %w", rel, err)
 	}
 	e.mu.Lock()
 	e.status.Uploaded++
+	e.status.TotalUploaded++
 	e.mu.Unlock()
+	return nil
+}
+
+// deleteRemote mirrors a local deletion up to the server. Only called
+// from upload-only folders — see reconcileOne for the rationale.
+func (e *Engine) deleteRemote(f settings.SyncFolder, rel string) error {
+	e.setInFlight("✕ " + rel)
+	if err := e.api.DeleteFile(remoteKey(f, rel)); err != nil {
+		return fmt.Errorf("delete remote %s: %w", rel, err)
+	}
 	return nil
 }
 
 func (e *Engine) download(f settings.SyncFolder, rel string) error {
 	local := filepath.Join(f.Local, filepath.FromSlash(rel))
-	key := rel
-	if f.RemotePrefix != "" {
-		key = strings.TrimSuffix(f.RemotePrefix, "/") + "/" + rel
-	}
 	e.setInFlight("↓ " + rel)
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
-		return err
+		return fmt.Errorf("mkdir for %s: %w", rel, err)
 	}
-	if err := e.api.DownloadFile(key, local); err != nil {
+	if err := e.api.DownloadFile(remoteKey(f, rel), local); err != nil {
 		return fmt.Errorf("download %s: %w", rel, err)
 	}
 	e.mu.Lock()
 	e.status.Downloaded++
+	e.status.TotalDownloaded++
 	e.mu.Unlock()
 	return nil
 }
 
+// setErr is used for fatal-to-this-pass errors (watcher init, remote
+// listing). recordErr is used for per-file errors that must not stop
+// the pass — it bumps a counter and stores LastError for visibility
+// but lets reconcile keep going.
 func (e *Engine) setErr(err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.status.LastError = err.Error()
 	e.logger("sync error: " + err.Error())
+}
+
+func (e *Engine) recordErr(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.status.Errors++
+	e.status.LastError = err.Error()
+	e.logger("sync: " + err.Error())
 }
 
 func (e *Engine) setInFlight(s string) {
