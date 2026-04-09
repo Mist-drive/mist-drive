@@ -8,7 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  api:
+  mist-drive:
+    # Single unified image: the Dockerfile's multi-stage build pulls in
+    # both ./api (Go) and ./web (Vite) from the repo root and embeds
+    # the built SPA into the Go binary via //go:embed. One tag → one
+    # image to deploy.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,38 +24,15 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/mist-drive-api
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/mist-drive
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha
       - uses: docker/build-push-action@v6
         with:
-          context: ./api
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/mist-drive-web
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha
-      - uses: docker/build-push-action@v6
-        with:
-          context: ./web
+          context: .
+          file: api/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

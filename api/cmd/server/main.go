@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
 	"github.com/yann/mist-drive/api/internal/users"
+	"github.com/yann/mist-drive/api/internal/webui"
 )
 
 func main() {
@@ -53,7 +53,11 @@ func main() {
 
 	app := fiber.New(fiber.Config{AppName: "mist-drive", DisableStartupMessage: true})
 	app.Use(recover.New())
-	app.Use(cors.New(cors.Config{AllowOrigins: cfg.CORSOrigins, AllowHeaders: "Authorization,Content-Type"}))
+	// CORS is intentionally not configured: the SPA is served from the
+	// same origin as the API (see webui.Mount below), so cross-origin
+	// requests shouldn't reach us in the first place. If you ever need
+	// to talk to this API from a different origin, add cors.New() back
+	// here with an explicit allowlist — never "*" once auth is real.
 
 	// Request logger (skips configured paths)
 	app.Use(func(c *fiber.Ctx) error {
@@ -76,6 +80,13 @@ func main() {
 		Events:       events.NewHub(),
 	}
 	srv.Register(app)
+
+	// Embedded SPA — must come AFTER srv.Register so API/auth/ws
+	// routes take precedence. Anything that falls through lands on
+	// the Vite build baked into the binary via //go:embed.
+	if err := webui.Mount(app); err != nil {
+		appLog.Fatal("webui mount: %v", err)
+	}
 
 	appLog.Info("starting %s on port %s (level=%s)", cfg.ServiceName, cfg.Port, cfg.LogLevel)
 	if err := app.Listen(":" + cfg.Port); err != nil {

@@ -102,7 +102,6 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 		UploadTTL:       time.Hour,
 		DefaultQuota:    quotaBytes,
 		PresignDownload: 5 * time.Minute,
-		CORSOrigins:     "*",
 	}
 
 	uStore, err := users.NewStore(dataDir)

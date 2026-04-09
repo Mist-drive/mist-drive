@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>mist-drive (frontend not built)</title>
+  </head>
+  <body style="font-family: system-ui; max-width: 40rem; margin: 4rem auto; line-height: 1.5;">
+    <h1>mist-drive</h1>
+    <p>This placeholder ships inside the Go binary so <code>//go:embed</code>
+       compiles when the web frontend hasn't been built yet. The production
+       Docker image overwrites this directory with the real Vite build
+       output.</p>
+    <p>To build the real UI locally:</p>
+    <pre>cd web &amp;&amp; bun install &amp;&amp; bun run build
+cp -r dist/* ../api/internal/webui/dist/</pre>
+  </body>
+</html>

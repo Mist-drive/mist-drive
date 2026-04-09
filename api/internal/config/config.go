@@ -21,7 +21,6 @@ type Config struct {
 	PublicS3Host     string // host clients use for presigned URLs
 	UploadTTL        time.Duration
 	DefaultQuota     int64
-	CORSOrigins      string
 	LogLevel         string
 	LogPath          string
 	ServiceName      string
@@ -53,7 +52,6 @@ func Load() *Config {
 		PublicS3Host:    env("PUBLIC_S3_HOST", ""),
 		UploadTTL:       time.Duration(intEnv("UPLOAD_TTL_HOURS", 6)) * time.Hour,
 		DefaultQuota:    int64(intEnv("DEFAULT_QUOTA_BYTES", 10*1024*1024*1024)),
-		CORSOrigins:     env("CORS_ORIGINS", "*"),
 		LogLevel:        env("LOG_LEVEL", "info"),
 		LogPath:         env("LOG_PATH", "/app/logs/app.log"),
 		ServiceName:     env("SERVICE_NAME", "mist-drive-api"),

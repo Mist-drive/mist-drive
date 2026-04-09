@@ -1,7 +1,7 @@
-.PHONY: help install build dev run clean test test-unit test-integration
+.PHONY: help install build dev run clean test test-unit test-integration desktop-dev desktop-build
 
 help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 install: ## install deps for api + web + desktop
 	cd api && go mod download
@@ -11,13 +11,6 @@ install: ## install deps for api + web + desktop
 build: ## build api + web + desktop
 	cd api && CGO_ENABLED=0 go build -o bin/api ./cmd/server
 	cd web && bun run build
-	cd desktop && wails build
-
-desktop-dev: ## run the wails desktop app in dev mode
-	# webkit2_41 tag required on Ubuntu 24.04+ (webkit2gtk-4.1).
-	cd desktop && wails dev -tags webkit2_41
-
-desktop-build: ## build the wails desktop binary
 	cd desktop && wails build -tags webkit2_41
 
 dev: ## run api (air) + web (vite) locally, side by side
@@ -26,13 +19,14 @@ dev: ## run api (air) + web (vite) locally, side by side
 	 (cd web && bun run dev); \
 	 wait
 
-data-dirs: ## pre-create bind-mount dirs owned by the host user (avoids root-owned dirs from dockerd)
+desktop-dev: ## run the wails desktop app in dev mode (webkit2_41 tag is required on Ubuntu 24.04+)
+	cd desktop && wails dev -tags webkit2_41
+
+desktop-build: ## build the wails desktop binary
+	cd desktop && wails build -tags webkit2_41
+
+run: ## docker compose up — mist-drive + minio, no TLS, no reverse proxy
 	mkdir -p deploy/data/api deploy/data/minio deploy/data/logs
-
-run: data-dirs ## docker compose up (with traefik tls profile)
-	cd deploy && docker compose --profile tls up --build
-
-run-notls: data-dirs ## docker compose up without traefik (bring your own gateway)
 	cd deploy && docker compose up --build
 
 test: test-unit test-integration ## run all api tests (unit + integration)
