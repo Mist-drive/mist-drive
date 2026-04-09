@@ -25,10 +25,17 @@ jobs:
         id: meta
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/mist-drive
+          # Two tags only: the exact version (1.0.0) and `latest` so a
+          # compose `image: user/mist-drive:latest` just pulls the most
+          # recent release. No sha tags, no major.minor floaters — the
+          # registry filled up too fast last time. `latest` is auto-set
+          # to the highest semver tag by `flavor: latest=true`, even
+          # when the trigger is a tag push (the default would only
+          # mark it on branch pushes).
+          flavor: |
+            latest=true
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
       - uses: docker/build-push-action@v6
         with:
           context: .
