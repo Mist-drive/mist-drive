@@ -2,8 +2,8 @@ package main
 
 import (
 	"embed"
-
 	"fmt"
+	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -23,12 +23,27 @@ var version = "dev"
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// trayIcon is the PNG the system tray renders. Same asset as the
-// window icon so the user sees a consistent identity across taskbar,
-// tray and app switcher.
+// Two copies of the same icon embedded as different formats because
+// fyne.io/systray is picky per OS: Linux/macOS decode PNG bytes,
+// Windows needs a real .ico with its sub-icon directory. Passing a
+// PNG on Windows results in an empty tray slot (the root cause of
+// the "no tray icon on Windows" bug). The Linux desktop launcher
+// helper keeps using the PNG because that's what .desktop + GNOME's
+// icon theme expect.
 //
 //go:embed build/appicon.png
-var trayIcon []byte
+var trayIconPNG []byte
+
+//go:embed build/windows/icon.ico
+var trayIconICO []byte
+
+// trayIcon returns the right byte slice for the current OS.
+func trayIcon() []byte {
+	if runtime.GOOS == "windows" {
+		return trayIconICO
+	}
+	return trayIconPNG
+}
 
 func main() {
 	app := NewApp()
@@ -42,7 +57,7 @@ func main() {
 	// non-fatal: a missing menu entry is annoying, not broken.
 	if desktopentry.IsDevBinary() {
 		fmt.Println("[desktop entry] skipping install (dev binary)")
-	} else if err := desktopentry.Install(trayIcon); err != nil {
+	} else if err := desktopentry.Install(trayIconPNG); err != nil {
 		fmt.Println("[desktop entry]", err)
 	}
 
@@ -50,7 +65,7 @@ func main() {
 	// goroutine on Linux/Windows so it does not compete with Wails for
 	// the main thread. The tray calls back into the App for state
 	// changes — it has no knowledge of Wails runtime.
-	tray.Start(trayIcon, "Mist Drive", tray.Callbacks{
+	tray.Start(trayIcon(), "Mist Drive", tray.Callbacks{
 		OnOpen: app.ShowWindow,
 		OnQuit: app.RequestQuit,
 	})
