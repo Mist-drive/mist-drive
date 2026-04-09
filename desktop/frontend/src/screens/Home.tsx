@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Me, OpenWebApp } from '../../wailsjs/go/main/App'
+import { useEffect, useState } from 'react'
+import { GetVersion, Me, OpenWebApp } from '../../wailsjs/go/main/App'
 import { apiclient } from '../../wailsjs/go/models'
 import Files from './Files'
 import SyncPanel from './Sync'
@@ -20,6 +20,11 @@ type Tab = 'files' | 'sync'
 export default function Home({ user: initial, onLogout }: Props) {
   const [user, setUser] = useState(initial)
   const [tab, setTab] = useState<Tab>('files')
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    GetVersion().then(setVersion).catch(() => {})
+  }, [])
 
   const refreshQuota = async () => {
     try { setUser(await Me()) } catch { /* ignore */ }
@@ -43,6 +48,13 @@ export default function Home({ user: initial, onLogout }: Props) {
         <div className="logo">
           <span className="logo-dot" />
           <span className="logo-text">MIST&nbsp;DRIVE</span>
+          {version && (
+            <span
+              className="muted"
+              style={{ marginLeft: '.5rem', fontSize: '0.7rem', letterSpacing: 0 }}
+              title="Build version"
+            >{version}</span>
+          )}
         </div>
         <button style={tabStyle('files')} onClick={() => setTab('files')}>Files</button>
         <button style={tabStyle('sync')} onClick={() => setTab('sync')}>Sync</button>

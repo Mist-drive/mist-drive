@@ -3,6 +3,7 @@ module mist-drive-desktop
 go 1.25.0
 
 require (
+	fyne.io/systray v1.12.0
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/wailsapp/wails/v2 v2.11.0

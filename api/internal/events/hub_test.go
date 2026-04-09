@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+func init() {
+	// Deliver synchronously in tests so assertions don't race the
+	// trailing-debounce timer.
+	CoalesceWindow = 0
+}
+
 func TestHubPublishDelivers(t *testing.T) {
 	h := NewHub()
 	ch, unsub := h.Subscribe("u1")
@@ -43,9 +49,9 @@ func TestHubUnsubscribe(t *testing.T) {
 	h := NewHub()
 	_, unsub := h.Subscribe("u")
 	unsub()
-	h.mu.RLock()
+	h.mu.Lock()
 	_, ok := h.subs["u"]
-	h.mu.RUnlock()
+	h.mu.Unlock()
 	if ok {
 		t.Fatal("user entry not cleaned up")
 	}
@@ -69,5 +75,32 @@ func TestHubOverflowDrops(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("publisher blocked on slow subscriber")
+	}
+}
+
+func TestHubCoalescesBurst(t *testing.T) {
+	// Flip coalescing back on for this test only.
+	prev := CoalesceWindow
+	CoalesceWindow = 50 * time.Millisecond
+	defer func() { CoalesceWindow = prev }()
+
+	h := NewHub()
+	ch, unsub := h.Subscribe("u")
+	defer unsub()
+
+	// 50 publishes inside one window must collapse to a single delivery.
+	for range 50 {
+		h.Publish("u", Event{Type: FilesChanged})
+	}
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("coalesced event never delivered")
+	}
+	// Nothing else should land for at least another full window.
+	select {
+	case <-ch:
+		t.Fatal("burst was not coalesced")
+	case <-time.After(2 * CoalesceWindow):
 	}
 }

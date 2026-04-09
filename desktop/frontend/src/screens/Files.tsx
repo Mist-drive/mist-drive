@@ -80,6 +80,7 @@ export default function Files({ onQuotaChange }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null) // status line during uploads/downloads
+  const [query, setQuery] = useState('')
 
   const refresh = async () => {
     try { setFiles((await ListFiles()) || []) }
@@ -136,6 +137,28 @@ export default function Files({ onQuotaChange }: Props) {
     onQuotaChange?.()
   }
 
+  // Client-side search: case-insensitive substring match on the full
+  // key. The whole listing is already in memory so there's no reason
+  // to round-trip the API — mirrors the web UI's behavior.
+  const q = query.trim().toLowerCase()
+  const filteredFiles = q
+    ? files.filter((f) => f.key.toLowerCase().includes(q))
+    : files
+  // When a search is active, auto-expand every ancestor folder of a
+  // match so hits are visible without manual clicking.
+  const effectiveExpanded = q
+    ? (() => {
+        const open: Record<string, boolean> = { ...expanded }
+        for (const f of filteredFiles) {
+          const parts = f.key.split('/').filter(Boolean)
+          for (let i = 1; i < parts.length; i++) {
+            open[parts.slice(0, i).join('/')] = true
+          }
+        }
+        return open
+      })()
+    : expanded
+
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
@@ -146,6 +169,20 @@ export default function Files({ onQuotaChange }: Props) {
         </div>
       </div>
       {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
+      <div className="row" style={{ marginBottom: '.6rem' }}>
+        <input
+          type="search"
+          placeholder="Search files…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ flex: 1 }}
+        />
+        {query && (
+          <span className="muted" style={{ flexShrink: 0 }}>
+            {filteredFiles.length} / {files.length}
+          </span>
+        )}
+      </div>
       <table>
         <thead>
           <tr>
@@ -169,7 +206,7 @@ export default function Files({ onQuotaChange }: Props) {
           </tr>
         </thead>
         <tbody>
-          {renderTree(buildTree(files), 0, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder)}
+          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder)}
         </tbody>
       </table>
       <div style={{

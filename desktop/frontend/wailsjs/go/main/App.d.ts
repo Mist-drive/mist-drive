@@ -16,6 +16,8 @@ export function DownloadFolder(arg1:string):Promise<string>;
 
 export function GetSettings():Promise<settings.Settings>;
 
+export function GetVersion():Promise<string>;
+
 export function ListFiles():Promise<Array<apiclient.ObjectInfo>>;
 
 export function Login(arg1:string,arg2:string,arg3:string):Promise<apiclient.PublicUser>;
@@ -30,6 +32,8 @@ export function RecomputeUsage():Promise<number>;
 
 export function RemoveSyncFolder(arg1:number):Promise<void>;
 
+export function RequestQuit():Promise<void>;
+
 export function SaveSettings(arg1:settings.Settings):Promise<void>;
 
 export function SetBandwidthLimits(arg1:number,arg2:number):Promise<void>;
@@ -37,6 +41,8 @@ export function SetBandwidthLimits(arg1:number,arg2:number):Promise<void>;
 export function SetFolderDirections(arg1:number,arg2:boolean,arg3:boolean):Promise<void>;
 
 export function SetFolderEnabled(arg1:number,arg2:boolean):Promise<void>;
+
+export function ShowWindow():Promise<void>;
 
 export function SyncStatus():Promise<sync.Status>;
 

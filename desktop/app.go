@@ -23,6 +23,14 @@ type App struct {
 	api      *apiclient.Client
 	engine   *syncpkg.Engine
 	ws       *wsclient.Client
+	// version is injected from main via an -ldflags override so the
+	// frontend can show the release tag in the header. Defaults to
+	// "dev" for local `wails dev` runs.
+	version string
+	// forceQuit is flipped by the tray's Quit menu item so the next
+	// close-window event is allowed through OnBeforeClose instead of
+	// being intercepted into a "minimize to tray".
+	forceQuit bool
 }
 
 func NewApp() *App {
@@ -115,6 +123,51 @@ func (a *App) Login(apiURL, login, password string) (apiclient.PublicUser, error
 	return user, nil
 }
 
+// ShowWindow un-minimises the main window. We deliberately use
+// Unminimise rather than WindowShow because on Ubuntu/GNOME raising
+// a hidden window triggers a focus-stealing-prevention notification;
+// un-minimising a known window doesn't, since the WM never lost
+// track of it. Unminimise also preserves position, size and the
+// monitor the window was on, which sidesteps the multi-screen edge
+// cases that WindowHide/WindowShow introduced.
+func (a *App) ShowWindow() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowUnminimise(a.ctx)
+}
+
+// RequestQuit is the tray "Quit" path. It flips the force-quit flag
+// so OnBeforeClose lets the next close through, then asks Wails to
+// close the window. Kept as a method so main.go can wire the tray
+// without leaking Wails internals into the tray package.
+func (a *App) RequestQuit() {
+	a.forceQuit = true
+	a.engine.Stop()
+	a.ws.Stop()
+	if a.ctx != nil {
+		runtime.Quit(a.ctx)
+	}
+}
+
+// beforeClose is the Wails close-intercept. Returning true cancels
+// the close, which we do so the window hides into the tray instead
+// of exiting the process. The tray's Quit menu sets forceQuit first,
+// so that path still exits cleanly.
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.forceQuit {
+		return false
+	}
+	// Minimise instead of hide. Keeps the window in the WM's known
+	// set so the next show does not trigger GNOME's focus-stealing
+	// notification, and preserves position/size/monitor for free.
+	// Downside: the app keeps a taskbar entry while minimised, which
+	// is consistent with how other tray apps (Slack, Discord) behave
+	// on Ubuntu.
+	runtime.WindowMinimise(ctx)
+	return true
+}
+
 // Logout wipes the stored JWT. The URL and folder config are kept
 // so the next login is a single field.
 func (a *App) Logout() error {
@@ -129,6 +182,10 @@ func (a *App) Logout() error {
 	a.engine.Stop()
 	return nil
 }
+
+// GetVersion returns the build-injected version string for display in
+// the frontend. "dev" means a local wails-dev build with no ldflags.
+func (a *App) GetVersion() string { return a.version }
 
 // Me returns the current user or an error if the stored token is
 // missing / invalid. Called on app boot to decide whether to land on

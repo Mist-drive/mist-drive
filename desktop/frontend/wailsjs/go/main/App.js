@@ -26,6 +26,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
+}
+
 export function ListFiles() {
   return window['go']['main']['App']['ListFiles']();
 }
@@ -54,6 +58,10 @@ export function RemoveSyncFolder(arg1) {
   return window['go']['main']['App']['RemoveSyncFolder'](arg1);
 }
 
+export function RequestQuit() {
+  return window['go']['main']['App']['RequestQuit']();
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
@@ -68,6 +76,10 @@ export function SetFolderDirections(arg1, arg2, arg3) {
 
 export function SetFolderEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetFolderEnabled'](arg1, arg2);
+}
+
+export function ShowWindow() {
+  return window['go']['main']['App']['ShowWindow']();
 }
 
 export function SyncStatus() {
