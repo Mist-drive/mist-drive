@@ -1,8 +1,10 @@
-name: build-and-push
+name: build_dockers
+# Triggered only on version tags so every main push doesn't rebuild
+# and shove a new image into Docker Hub. Cut a release the same way as
+# the desktop workflow: `git tag v1.2.3 && git push origin v1.2.3`.
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 jobs:

@@ -1,4 +1,4 @@
-name: Build and Release
+name: build_desktop
 
 # Triggered only on version tags so random pushes don't spam Releases.
 # Push a tag with `git tag v1.2.3 && git push origin v1.2.3` to cut one.
