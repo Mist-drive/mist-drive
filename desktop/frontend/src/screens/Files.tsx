@@ -90,7 +90,7 @@ export default function Files({ onQuotaChange }: Props) {
     refresh()
     // Server pushes "files-changed" whenever any client mutates the
     // bucket; the envelope carries no delta so we just re-fetch.
-    return EventsOn('files-changed', () => { refresh() })
+    return EventsOn('files-changed', () => { refresh(); onQuotaChange?.() })
   }, [])
 
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))

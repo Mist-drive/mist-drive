@@ -243,6 +243,7 @@ func (e *Engine) syncWatchers(w *fsnotify.Watcher, watched map[string]bool) {
 // per-folder work is just a prefix filter on the same slice, saving
 // N−1 list calls when the user has multiple mappings.
 func (e *Engine) reconcileAll(ctx context.Context) {
+	gen := e.st.Generation()
 	s := e.st.Get()
 	e.api.SetUploadRateKBps(s.MaxUploadRateKBps)
 
@@ -267,10 +268,17 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		// Settings changed mid-pass (e.g. folder removed) — abort so the
+		// next pass works with the fresh config instead of continuing
+		// with a stale snapshot.
+		if e.st.Generation() != gen {
+			e.logger("settings changed mid-pass, aborting")
+			return
+		}
 		if !f.Enabled {
 			continue
 		}
-		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll)
+		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll, gen)
 	}
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
@@ -314,7 +322,7 @@ func scanLocal(root string) (map[string]localFile, error) {
 // reconcileOne performs one full pass for a single mapping. Per-file
 // errors are logged and counted but never abort the pass — a flaky
 // permission on one file should not stop the rest from syncing.
-func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUpload, doDownload bool, remoteAll []apiclient.ObjectInfo) {
+func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUpload, doDownload bool, remoteAll []apiclient.ObjectInfo, gen uint64) {
 	if _, err := os.Stat(f.Local); os.IsNotExist(err) {
 		if err := os.MkdirAll(f.Local, 0o755); err != nil {
 			e.recordErr(fmt.Errorf("mkdir %s: %w", f.Local, err))
@@ -351,7 +359,7 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 	seen := map[string]bool{}
 	for rel, lf := range local {
 		seen[rel] = true
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || e.st.Generation() != gen {
 			return
 		}
 		ro, ok := remote[rel]
@@ -372,7 +380,7 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 		if seen[rel] {
 			continue
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || e.st.Generation() != gen {
 			return
 		}
 		// Upload-only mode treats the local folder as the source of

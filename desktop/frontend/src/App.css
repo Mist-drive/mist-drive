@@ -65,12 +65,27 @@ label {
   letter-spacing: 1px; color: var(--text-secondary);
   margin: .9rem 0 .4rem;
 }
-input {
+input, select {
   width: 100%; background: var(--bg-input); color: var(--text-primary);
   border: 1px solid var(--border); padding: .7rem .9rem;
   border-radius: 10px; font-size: 0.95rem; font-family: inherit;
 }
-input:focus { outline: none; border-color: var(--accent-blue); }
+input:focus, select:focus { outline: none; border-color: var(--accent-blue); }
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888899' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .9rem center;
+  padding-right: 2.4rem;
+  cursor: pointer;
+}
+select option {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: .5rem;
+}
 
 button {
   cursor: pointer;
@@ -102,7 +117,18 @@ button.ghost:hover { background: rgba(255, 255, 255, 0.08); }
   background: linear-gradient(135deg, #ffffff, #aaaabb);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
-.login-card button { width: 100%; margin-top: 1.2rem; padding: .8rem; }
+.login-card button[type="submit"] { width: 100%; margin-top: 1.2rem; padding: .8rem; }
+
+.back-link {
+  all: unset;
+  display: inline-block;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--accent-blue);
+  margin-top: .4rem;
+  opacity: 0.8;
+}
+.back-link:hover { opacity: 1; text-decoration: underline; }
 
 .error { color: var(--accent-red); font-size: 0.85rem; margin-top: .8rem; }
 

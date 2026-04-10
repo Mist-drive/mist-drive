@@ -2,6 +2,10 @@
 // (JWT, api url, synced folders, bandwidth limits, ...). The file lives
 // in the user's XDG config dir so it survives reinstalls and is shared
 // across sync sessions.
+//
+// Settings are scoped per API URL ("environment") so switching between
+// localhost dev and a production VPS doesn't cross-pollinate sync
+// folders or tokens.
 package settings
 
 import (
@@ -28,26 +32,49 @@ type SyncFolder struct {
 	Enabled bool `json:"enabled"`
 }
 
-// Settings is the full on-disk shape. Zero values are safe defaults;
-// Load() fills in whatever is missing.
-type Settings struct {
-	APIURL                string       `json:"apiUrl"`
-	JWT                   string       `json:"jwt"`
-	Login                 string       `json:"login"` // cached for UI only
-	Folders               []SyncFolder `json:"folders"`
-	MaxConcurrentUploads  int          `json:"maxConcurrentUploads"`
-	// 0 = unlimited. Applied per-process across all parts in flight.
-	MaxUploadRateKBps int  `json:"maxUploadRateKBps"`
-	StartOnLaunch     bool `json:"startOnLaunch"`
+// EnvSettings holds config that is specific to a single API endpoint.
+type EnvSettings struct {
+	JWT                  string       `json:"jwt"`
+	Login                string       `json:"login"`
+	Folders              []SyncFolder `json:"folders"`
+	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
+	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
 }
 
-func defaults() Settings {
-	return Settings{
-		APIURL:               "http://localhost:3000",
+func envDefaults() EnvSettings {
+	return EnvSettings{
 		Folders:              []SyncFolder{},
 		MaxConcurrentUploads: 4,
 		MaxUploadRateKBps:    0,
-		StartOnLaunch:        false,
+	}
+}
+
+// Settings is the public view returned by Get(). It flattens the active
+// environment into a single struct so callers (and the frontend) don't
+// need to know about the multi-env disk layout.
+type Settings struct {
+	APIURL               string       `json:"apiUrl"`
+	JWT                  string       `json:"jwt"`
+	Login                string       `json:"login"`
+	Folders              []SyncFolder `json:"folders"`
+	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
+	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
+	StartOnLaunch        bool         `json:"startOnLaunch"`
+}
+
+// diskFormat is the actual JSON shape on disk. Settings are partitioned
+// by API URL so switching between dev / prod keeps folders, tokens and
+// bandwidth limits independent.
+type diskFormat struct {
+	ActiveEnv    string                 `json:"activeEnv"`
+	Environments map[string]*EnvSettings `json:"environments"`
+	StartOnLaunch bool                  `json:"startOnLaunch"`
+}
+
+func diskDefaults() diskFormat {
+	return diskFormat{
+		ActiveEnv:    "http://localhost:3000",
+		Environments: map[string]*EnvSettings{},
 	}
 }
 
@@ -57,12 +84,22 @@ func defaults() Settings {
 type Store struct {
 	path string
 	mu   sync.RWMutex
-	s    Settings
+	d    diskFormat
+	// gen is bumped on every Save so the sync engine can detect mid-pass
+	// config changes (e.g. folder removal) and abort stale work.
+	gen uint64
+}
+
+// Generation returns a counter that increments on every Save. The sync
+// engine snapshots it before a pass and compares mid-pass to detect
+// settings changes (folder removal) that should abort stale work.
+func (st *Store) Generation() uint64 {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.gen
 }
 
 func configPath() (string, error) {
-	// XDG_CONFIG_HOME, falling back to ~/.config on linux/mac and
-	// %AppData% on windows, is exactly what os.UserConfigDir returns.
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -78,11 +115,22 @@ func Open() (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return nil, err
 	}
-	st := &Store{path: p, s: defaults()}
+	st := &Store{path: p, d: diskDefaults()}
 	if err := st.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// legacyFormat is the pre-multi-env flat shape used for migration.
+type legacyFormat struct {
+	APIURL               string       `json:"apiUrl"`
+	JWT                  string       `json:"jwt"`
+	Login                string       `json:"login"`
+	Folders              []SyncFolder `json:"folders"`
+	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
+	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
+	StartOnLaunch        bool         `json:"startOnLaunch"`
 }
 
 func (st *Store) load() error {
@@ -90,29 +138,119 @@ func (st *Store) load() error {
 	if err != nil {
 		return err
 	}
-	// Start from defaults so missing fields in older files get sane
-	// values after an upgrade.
-	s := defaults()
-	if err := json.Unmarshal(b, &s); err != nil {
+
+	// Try new multi-env format first.
+	d := diskDefaults()
+	if err := json.Unmarshal(b, &d); err != nil {
 		return err
 	}
-	st.s = s
+
+	// Detect legacy flat format: no "environments" key means the old
+	// shape. Migrate it into the new layout.
+	if len(d.Environments) == 0 {
+		var old legacyFormat
+		if err := json.Unmarshal(b, &old); err != nil {
+			return err
+		}
+		url := old.APIURL
+		if url == "" {
+			url = "http://localhost:3000"
+		}
+		env := envDefaults()
+		env.JWT = old.JWT
+		env.Login = old.Login
+		if old.Folders != nil {
+			env.Folders = old.Folders
+		}
+		if old.MaxConcurrentUploads > 0 {
+			env.MaxConcurrentUploads = old.MaxConcurrentUploads
+		}
+		if old.MaxUploadRateKBps > 0 {
+			env.MaxUploadRateKBps = old.MaxUploadRateKBps
+		}
+		d.ActiveEnv = url
+		d.Environments = map[string]*EnvSettings{url: &env}
+		d.StartOnLaunch = old.StartOnLaunch
+		st.d = d
+		// Persist the migration immediately so next load is clean.
+		return st.flush()
+	}
+
+	st.d = d
 	return nil
 }
 
-// Get returns a copy so callers can't mutate the store without a Save.
+// activeEnv returns the EnvSettings for the current active URL,
+// creating it with defaults if missing.
+func (st *Store) activeEnv() *EnvSettings {
+	e, ok := st.d.Environments[st.d.ActiveEnv]
+	if !ok {
+		def := envDefaults()
+		e = &def
+		st.d.Environments[st.d.ActiveEnv] = e
+	}
+	return e
+}
+
+// Get returns a flattened Settings for the active environment.
 func (st *Store) Get() Settings {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return st.s
+	e := st.activeEnv()
+	return Settings{
+		APIURL:               st.d.ActiveEnv,
+		JWT:                  e.JWT,
+		Login:                e.Login,
+		Folders:              e.Folders,
+		MaxConcurrentUploads: e.MaxConcurrentUploads,
+		MaxUploadRateKBps:    e.MaxUploadRateKBps,
+		StartOnLaunch:        st.d.StartOnLaunch,
+	}
 }
 
-// Save atomically replaces the file via temp+rename so a crash mid-write
-// can never leave a half-written config on disk.
+// Save writes the flattened Settings back. If the APIURL changed, the
+// active environment switches to the new URL.
 func (st *Store) Save(s Settings) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	b, err := json.MarshalIndent(s, "", "  ")
+
+	url := s.APIURL
+	if url == "" {
+		url = st.d.ActiveEnv
+	}
+	st.d.ActiveEnv = url
+	st.d.StartOnLaunch = s.StartOnLaunch
+
+	e, ok := st.d.Environments[url]
+	if !ok {
+		def := envDefaults()
+		e = &def
+		st.d.Environments[url] = e
+	}
+	e.JWT = s.JWT
+	e.Login = s.Login
+	e.Folders = s.Folders
+	e.MaxConcurrentUploads = s.MaxConcurrentUploads
+	e.MaxUploadRateKBps = s.MaxUploadRateKBps
+
+	st.gen++
+	return st.flush()
+}
+
+// ListEnvironments returns all saved API URLs.
+func (st *Store) ListEnvironments() []string {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	urls := make([]string, 0, len(st.d.Environments))
+	for url := range st.d.Environments {
+		urls = append(urls, url)
+	}
+	return urls
+}
+
+// flush writes the disk format to the file. Caller must hold st.mu.
+func (st *Store) flush() error {
+	b, err := json.MarshalIndent(st.d, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -120,9 +258,5 @@ func (st *Store) Save(s Settings) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, st.path); err != nil {
-		return err
-	}
-	st.s = s
-	return nil
+	return os.Rename(tmp, st.path)
 }

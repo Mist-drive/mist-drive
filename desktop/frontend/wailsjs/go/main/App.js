@@ -30,6 +30,10 @@ export function GetVersion() {
   return window['go']['main']['App']['GetVersion']();
 }
 
+export function ListEnvironments() {
+  return window['go']['main']['App']['ListEnvironments']();
+}
+
 export function ListFiles() {
   return window['go']['main']['App']['ListFiles']();
 }

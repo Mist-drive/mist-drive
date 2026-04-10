@@ -86,6 +86,12 @@ func (a *App) GetSettings() settings.Settings {
 	return a.settings.Get()
 }
 
+// ListEnvironments returns all saved API URLs so the login screen can
+// offer a quick-switch dropdown.
+func (a *App) ListEnvironments() []string {
+	return a.settings.ListEnvironments()
+}
+
 // SaveSettings persists the provided settings and reconfigures the
 // API client so later calls use the new URL / token.
 func (a *App) SaveSettings(s settings.Settings) error {
@@ -350,7 +356,13 @@ func (a *App) RemoveSyncFolder(index int) error {
 		return fmt.Errorf("invalid index %d", index)
 	}
 	s.Folders = append(s.Folders[:index], s.Folders[index+1:]...)
-	return a.settings.Save(s)
+	if err := a.settings.Save(s); err != nil {
+		return err
+	}
+	// Force an immediate new pass so the engine drops fsnotify watchers
+	// for the removed folder and stops acting on it.
+	a.engine.Nudge()
+	return nil
 }
 
 // SetBandwidthLimits persists the upload concurrency + kbps caps and

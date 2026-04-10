@@ -18,6 +18,8 @@ export function GetSettings():Promise<settings.Settings>;
 
 export function GetVersion():Promise<string>;
 
+export function ListEnvironments():Promise<Array<string>>;
+
 export function ListFiles():Promise<Array<apiclient.ObjectInfo>>;
 
 export function Login(arg1:string,arg2:string,arg3:string):Promise<apiclient.PublicUser>;
