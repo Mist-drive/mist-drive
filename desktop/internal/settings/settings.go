@@ -60,15 +60,17 @@ type Settings struct {
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
 	StartOnLaunch        bool         `json:"startOnLaunch"`
+	CloseToTray          bool         `json:"closeToTray"`
 }
 
 // diskFormat is the actual JSON shape on disk. Settings are partitioned
 // by API URL so switching between dev / prod keeps folders, tokens and
 // bandwidth limits independent.
 type diskFormat struct {
-	ActiveEnv    string                 `json:"activeEnv"`
-	Environments map[string]*EnvSettings `json:"environments"`
-	StartOnLaunch bool                  `json:"startOnLaunch"`
+	ActiveEnv     string                  `json:"activeEnv"`
+	Environments  map[string]*EnvSettings `json:"environments"`
+	StartOnLaunch bool                    `json:"startOnLaunch"`
+	CloseToTray   *bool                   `json:"closeToTray"` // nil = default true (hide to tray)
 }
 
 func diskDefaults() diskFormat {
@@ -131,6 +133,7 @@ type legacyFormat struct {
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
 	StartOnLaunch        bool         `json:"startOnLaunch"`
+	CloseToTray          *bool        `json:"closeToTray"`
 }
 
 func (st *Store) load() error {
@@ -171,6 +174,7 @@ func (st *Store) load() error {
 		d.ActiveEnv = url
 		d.Environments = map[string]*EnvSettings{url: &env}
 		d.StartOnLaunch = old.StartOnLaunch
+		d.CloseToTray = old.CloseToTray
 		st.d = d
 		// Persist the migration immediately so next load is clean.
 		return st.flush()
@@ -197,6 +201,10 @@ func (st *Store) Get() Settings {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	e := st.activeEnv()
+	closeToTray := true
+	if st.d.CloseToTray != nil {
+		closeToTray = *st.d.CloseToTray
+	}
 	return Settings{
 		APIURL:               st.d.ActiveEnv,
 		JWT:                  e.JWT,
@@ -205,6 +213,7 @@ func (st *Store) Get() Settings {
 		MaxConcurrentUploads: e.MaxConcurrentUploads,
 		MaxUploadRateKBps:    e.MaxUploadRateKBps,
 		StartOnLaunch:        st.d.StartOnLaunch,
+		CloseToTray:          closeToTray,
 	}
 }
 
@@ -220,6 +229,7 @@ func (st *Store) Save(s Settings) error {
 	}
 	st.d.ActiveEnv = url
 	st.d.StartOnLaunch = s.StartOnLaunch
+	st.d.CloseToTray = &s.CloseToTray
 
 	e, ok := st.d.Environments[url]
 	if !ok {

@@ -124,22 +124,28 @@ func (a *App) Login(apiURL, login, password string) (apiclient.PublicUser, error
 		return apiclient.PublicUser{}, err
 	}
 	a.api = apiclient.New(apiURL, token, true)
+	a.api.SetUploadRateKBps(s.MaxUploadRateKBps)
 	a.ws.Start(apiURL, token)
+	// Bounce the engine so it picks up the fresh API client and token.
+	// A plain Start() is a no-op if the old loop is still running (or
+	// exited without clearing cancel), so we stop first. SetAPI swaps
+	// the client ref so reconcile uses the new token.
+	a.engine.Stop()
+	a.engine.SetAPI(a.api)
+	a.engine.ClearStatus()
 	_ = a.engine.Start()
 	return user, nil
 }
 
-// ShowWindow un-minimises the main window. We deliberately use
-// Unminimise rather than WindowShow because on Ubuntu/GNOME raising
-// a hidden window triggers a focus-stealing-prevention notification;
-// un-minimising a known window doesn't, since the WM never lost
-// track of it. Unminimise also preserves position, size and the
-// monitor the window was on, which sidesteps the multi-screen edge
-// cases that WindowHide/WindowShow introduced.
+// ShowWindow restores the main window from tray. Uses WindowShow to
+// bring back a hidden window, then WindowUnminimise in case it was
+// minimised before hiding. Both calls are cheap no-ops when already
+// in the target state.
 func (a *App) ShowWindow() {
 	if a.ctx == nil {
 		return
 	}
+	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
 }
 
@@ -156,21 +162,20 @@ func (a *App) RequestQuit() {
 	}
 }
 
-// beforeClose is the Wails close-intercept. Returning true cancels
-// the close, which we do so the window hides into the tray instead
-// of exiting the process. The tray's Quit menu sets forceQuit first,
-// so that path still exits cleanly.
+// beforeClose is the Wails close-intercept. When CloseToTray is true
+// (the default), closing the window hides it to the system tray — the
+// tray's Quit menu is the real exit. When false, closing the window
+// exits the app normally.
 func (a *App) beforeClose(ctx context.Context) bool {
 	if a.forceQuit {
 		return false
 	}
-	// Minimise instead of hide. Keeps the window in the WM's known
-	// set so the next show does not trigger GNOME's focus-stealing
-	// notification, and preserves position/size/monitor for free.
-	// Downside: the app keeps a taskbar entry while minimised, which
-	// is consistent with how other tray apps (Slack, Discord) behave
-	// on Ubuntu.
-	runtime.WindowMinimise(ctx)
+	if !a.settings.Get().CloseToTray {
+		a.engine.Stop()
+		a.ws.Stop()
+		return false
+	}
+	runtime.WindowHide(ctx)
 	return true
 }
 
@@ -384,6 +389,12 @@ func (a *App) SetBandwidthLimits(maxConcurrent, maxKBps int) error {
 // what actually gets reconciled.
 func (a *App) SyncStatus() syncpkg.Status {
 	return a.engine.Status()
+}
+
+// SyncHistory returns the last N sync log entries (newest first) for
+// the history modal in the Sync panel.
+func (a *App) SyncHistory() []syncpkg.LogEntry {
+	return a.engine.History()
 }
 
 // SetFolderEnabled flips a single mapping's on/off switch. The engine

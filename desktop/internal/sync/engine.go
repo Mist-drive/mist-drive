@@ -65,6 +65,16 @@ type Status struct {
 	InFlight        string    `json:"inFlight"` // current file being transferred
 }
 
+// LogEntry is a single sync activity record shown in the history modal.
+type LogEntry struct {
+	Time    time.Time `json:"time"`
+	Action  string    `json:"action"` // "upload", "download", "delete", "error"
+	File    string    `json:"file"`
+	Error   string    `json:"error,omitempty"`
+}
+
+const maxLogEntries = 200
+
 type Engine struct {
 	api    API
 	st     *settings.Store
@@ -73,6 +83,7 @@ type Engine struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	status Status
+	log    []LogEntry
 	// nudge is a 1-buffered channel that external callers (e.g. the
 	// websocket listener receiving a "files-changed" push) use to
 	// request an immediate reconcile without waiting for the 30s tick.
@@ -105,6 +116,27 @@ func (e *Engine) Status() Status {
 	return e.status
 }
 
+// History returns the log entries in reverse chronological order (newest first).
+func (e *Engine) History() []LogEntry {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]LogEntry, len(e.log))
+	for i, entry := range e.log {
+		out[len(e.log)-1-i] = entry
+	}
+	return out
+}
+
+func (e *Engine) appendLog(action, file, errMsg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	entry := LogEntry{Time: time.Now(), Action: action, File: file, Error: errMsg}
+	if len(e.log) >= maxLogEntries {
+		e.log = e.log[1:]
+	}
+	e.log = append(e.log, entry)
+}
+
 // Start spins up the reconcile loop. Subsequent calls while already
 // running are no-ops so the frontend can issue Start idempotently.
 func (e *Engine) Start() error {
@@ -135,6 +167,25 @@ func (e *Engine) Stop() {
 	}
 	e.status.Running = false
 	e.status.InFlight = ""
+}
+
+// ClearStatus resets error and counter state. Called after a fresh login
+// so stale 401 errors from an expired session don't linger in the UI.
+func (e *Engine) ClearStatus() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.status.LastError = ""
+	e.status.Errors = 0
+	e.status.InFlight = ""
+}
+
+// SetAPI swaps the underlying API client. Must be called while the
+// engine is stopped (between Stop and Start) so there is no race with
+// the reconcile loop.
+func (e *Engine) SetAPI(api API) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.api = api
 }
 
 // loop runs one initial reconcile, then re-runs whenever the fsnotify
@@ -420,8 +471,10 @@ func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 	e.setInFlight("↑ " + rel)
 	s := e.st.Get()
 	if err := e.api.UploadFile(local, remoteKey(f, rel), s.MaxConcurrentUploads); err != nil {
+		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("upload %s: %w", rel, err)
 	}
+	e.appendLog("upload", rel, "")
 	e.mu.Lock()
 	e.status.Uploaded++
 	e.status.TotalUploaded++
@@ -434,8 +487,10 @@ func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 func (e *Engine) deleteRemote(f settings.SyncFolder, rel string) error {
 	e.setInFlight("✕ " + rel)
 	if err := e.api.DeleteFile(remoteKey(f, rel)); err != nil {
+		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("delete remote %s: %w", rel, err)
 	}
+	e.appendLog("delete", rel, "")
 	return nil
 }
 
@@ -443,11 +498,14 @@ func (e *Engine) download(f settings.SyncFolder, rel string) error {
 	local := filepath.Join(f.Local, filepath.FromSlash(rel))
 	e.setInFlight("↓ " + rel)
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("mkdir for %s: %w", rel, err)
 	}
 	if err := e.api.DownloadFile(remoteKey(f, rel), local); err != nil {
+		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("download %s: %w", rel, err)
 	}
+	e.appendLog("download", rel, "")
 	e.mu.Lock()
 	e.status.Downloaded++
 	e.status.TotalDownloaded++
@@ -464,6 +522,11 @@ func (e *Engine) setErr(err error) {
 	defer e.mu.Unlock()
 	e.status.LastError = err.Error()
 	e.logger("sync error: " + err.Error())
+	entry := LogEntry{Time: time.Now(), Action: "error", Error: err.Error()}
+	if len(e.log) >= maxLogEntries {
+		e.log = e.log[1:]
+	}
+	e.log = append(e.log, entry)
 }
 
 func (e *Engine) recordErr(err error) {
@@ -472,6 +535,11 @@ func (e *Engine) recordErr(err error) {
 	e.status.Errors++
 	e.status.LastError = err.Error()
 	e.logger("sync: " + err.Error())
+	entry := LogEntry{Time: time.Now(), Action: "error", Error: err.Error()}
+	if len(e.log) >= maxLogEntries {
+		e.log = e.log[1:]
+	}
+	e.log = append(e.log, entry)
 }
 
 func (e *Engine) setInFlight(s string) {

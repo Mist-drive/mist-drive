@@ -3,9 +3,11 @@ import {
   AddSyncFolder,
   GetSettings,
   RemoveSyncFolder,
+  SaveSettings,
   SetBandwidthLimits,
   SetFolderDirections,
   SetFolderEnabled,
+  SyncHistory,
   SyncStatus,
 } from '../../wailsjs/go/main/App'
 import { settings, sync } from '../../wailsjs/go/models'
@@ -19,6 +21,8 @@ export default function SyncPanel() {
   const [s, setS] = useState<settings.Settings | null>(null)
   const [status, setStatus] = useState<sync.Status | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<sync.LogEntry[]>([])
 
   const refreshSettings = async () => setS(await GetSettings())
   const refreshStatus = async () => {
@@ -31,6 +35,11 @@ export default function SyncPanel() {
     const t = setInterval(refreshStatus, 1000)
     return () => clearInterval(t)
   }, [])
+
+  const openHistory = async () => {
+    setHistory(await SyncHistory())
+    setHistoryOpen(true)
+  }
 
   const onAdd = async () => {
     setErr(null)
@@ -57,13 +66,13 @@ export default function SyncPanel() {
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
         <h3 style={{ margin: 0 }}>Sync</h3>
+        <button className="ghost" onClick={openHistory} style={{ padding: '.3rem .7rem', fontSize: '0.8rem' }}>
+          History
+        </button>
       </div>
 
       {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
 
-      {/* Engine-level activity line. The loop is always running while
-          logged in, so we show counters + current file only — no more
-          running/stopped state (per-folder Sync buttons own that). */}
       {status && (
         <p className="muted" style={{ marginBottom: '1rem', fontSize: '0.85rem' }}>
           ↑ {status.uploaded} ↓ {status.downloaded} = {status.skipped}
@@ -71,6 +80,8 @@ export default function SyncPanel() {
           {status.lastError && <> · <span style={{ color: 'var(--accent-red)' }}>{status.lastError}</span></>}
         </p>
       )}
+
+      {historyOpen && <HistoryModal entries={history} onClose={() => setHistoryOpen(false)} />}
 
       <h4 style={{
         fontSize: '0.75rem',
@@ -162,6 +173,38 @@ export default function SyncPanel() {
         kbps={s.maxUploadRateKBps}
         onSave={onSaveLimits}
       />
+
+      <h4 style={{
+        fontSize: '0.75rem',
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        color: 'var(--text-secondary)',
+        marginTop: '1.5rem',
+        marginBottom: '.5rem',
+      }}>Behavior</h4>
+      <label style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '.5rem',
+        cursor: 'pointer',
+        fontSize: '0.9rem',
+        textTransform: 'none',
+        letterSpacing: 'normal',
+        color: 'var(--text-primary)',
+        margin: 0,
+      }}>
+        <input
+          type="checkbox"
+          checked={s.closeToTray}
+          onChange={async () => {
+            s.closeToTray = !s.closeToTray
+            await SaveSettings(s)
+            await refreshSettings()
+          }}
+          style={{ width: 'auto', margin: 0 }}
+        />
+        Close to Tray
+      </label>
     </div>
   )
 }
@@ -229,6 +272,68 @@ function BandwidthForm({
         style={{ alignSelf: 'flex-end' }}
         onClick={() => onSave(mc, kb)}
       >Save</button>
+    </div>
+  )
+}
+
+const actionIcon: Record<string, string> = {
+  upload: '↑', download: '↓', delete: '✕', error: '!',
+}
+
+function HistoryModal({ entries, onClose }: { entries: sync.LogEntry[]; onClose: () => void }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.6)', display: 'flex',
+        alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 16, padding: '1.5rem', width: '100%', maxWidth: 560,
+          maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+        }}
+      >
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
+          <h3 style={{ margin: 0 }}>Sync History</h3>
+          <button className="ghost" onClick={onClose} style={{ padding: '.3rem .6rem' }}>Close</button>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+          {entries.length === 0 && (
+            <p className="muted" style={{ fontSize: '0.85rem' }}>No activity yet.</p>
+          )}
+          {entries.map((e, i) => {
+            const t = e.time ? new Date(e.time).toLocaleTimeString() : ''
+            const isErr = e.action === 'error'
+            return (
+              <div key={i} style={{
+                display: 'flex', gap: '.6rem', alignItems: 'baseline',
+                padding: '.35rem 0',
+                borderBottom: '1px solid var(--border)',
+                fontSize: '0.85rem',
+              }}>
+                <span style={{
+                  width: 16, textAlign: 'center', flexShrink: 0,
+                  color: isErr ? 'var(--accent-red)' : 'var(--text-secondary)',
+                }}>
+                  {actionIcon[e.action] ?? '?'}
+                </span>
+                <span className="muted" style={{ flexShrink: 0, fontSize: '0.78rem' }}>{t}</span>
+                <span style={{
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  color: isErr ? 'var(--accent-red)' : 'var(--text-primary)',
+                }}>
+                  {e.file || e.error || e.action}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }

@@ -46,6 +46,8 @@ export function SetFolderEnabled(arg1:number,arg2:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 
+export function SyncHistory():Promise<Array<sync.LogEntry>>;
+
 export function SyncStatus():Promise<sync.Status>;
 
 export function UploadFile(arg1:string):Promise<string>;

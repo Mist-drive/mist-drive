@@ -86,6 +86,10 @@ export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
 }
 
+export function SyncHistory() {
+  return window['go']['main']['App']['SyncHistory']();
+}
+
 export function SyncStatus() {
   return window['go']['main']['App']['SyncStatus']();
 }
