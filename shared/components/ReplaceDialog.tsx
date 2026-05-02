@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 
+export type ConflictEntry = {
+  key: string
+  existingSize: number
+  incomingSize: number
+}
+
 type Props = {
-  conflicts: string[]
+  conflicts: ConflictEntry[]
   onConfirm: () => void
+  onDiff: () => void
   onCancel: () => void
 }
 
@@ -15,10 +22,11 @@ const pathStyle: React.CSSProperties = {
   unicodeBidi: 'plaintext',
 }
 
-export default function ReplaceDialog({ conflicts, onConfirm, onCancel }: Props) {
+export default function ReplaceDialog({ conflicts, onConfirm, onDiff, onCancel }: Props) {
   const [expanded, setExpanded] = useState(false)
   const confirmBtn = useRef<HTMLButtonElement>(null)
   const multi = conflicts.length > 1
+  const diffCount = conflicts.filter(c => c.incomingSize !== c.existingSize).length
 
   useEffect(() => {
     confirmBtn.current?.focus()
@@ -39,7 +47,7 @@ export default function ReplaceDialog({ conflicts, onConfirm, onCancel }: Props)
         <h3 className="modal-title">Replace existing {multi ? 'files' : 'file'}?</h3>
         <div className="modal-message">
           {!multi ? (
-            <span style={pathStyle}>{conflicts[0]}</span>
+            <span style={pathStyle}>{conflicts[0].key}</span>
           ) : (
             <>
               <button
@@ -53,9 +61,9 @@ export default function ReplaceDialog({ conflicts, onConfirm, onCancel }: Props)
               </button>
               {expanded && (
                 <ul style={{ maxHeight: '10rem', overflowY: 'auto', listStyle: 'none', margin: 0, padding: 0 }}>
-                  {conflicts.map(f => (
-                    <li key={f} style={{ padding: '.2rem 0' }}>
-                      <span className="muted" style={{ ...pathStyle, fontSize: '0.85rem' }}>{f}</span>
+                  {conflicts.map(c => (
+                    <li key={c.key} style={{ padding: '.2rem 0' }}>
+                      <span className="muted" style={{ ...pathStyle, fontSize: '0.85rem' }}>{c.key}</span>
                     </li>
                   ))}
                 </ul>
@@ -65,6 +73,13 @@ export default function ReplaceDialog({ conflicts, onConfirm, onCancel }: Props)
         </div>
         <div className="modal-actions">
           <button className="ghost" onClick={onCancel}>Cancel</button>
+          <button
+            onClick={onDiff}
+            disabled={diffCount === 0}
+            title={diffCount === 0 ? 'All conflicting files are identical (same size)' : `Upload only the ${diffCount} file${diffCount > 1 ? 's' : ''} with a different size`}
+          >
+            Diff ({diffCount})
+          </button>
           <button ref={confirmBtn} onClick={onConfirm}>Replace ({conflicts.length})</button>
         </div>
       </div>

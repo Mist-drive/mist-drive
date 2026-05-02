@@ -34,14 +34,15 @@ Wails bindings regen: `cd desktop && wails generate module`
 - **`internal/uploads/`** — Multipart upload state persistence (also JSON files). `gc.go` reclaims stale uploads.
 - **`internal/s3x/`** — MinIO/S3 client wrapper (presigned URLs, bucket ops).
 - **`internal/config/`** — All config from env vars. Required: `JWT_SECRET`, `ADMIN_PASSWORD`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`.
-- **`internal/quota/`** — In-memory upload quota reservations.
+- **`internal/quota/`** — In-memory upload quota reservations. `disk.go` has `DiskFree(path)` via `syscall.Statfs`.
 - **`internal/events/`** — WebSocket event hub for push notifications (`files-changed`).
 - **`internal/webui/`** — `//go:embed` of `web/dist/` into Go binary. Must be called AFTER route registration (fall-through handler).
+- **`/health`** — returns `{"ok": true, "version": "..."}`. Version injected at build time via `-ldflags`; defaults to `"dev"`.
 
 ### Web (`web/`)
 
 - Vite + Bun + React + TypeScript. No component library.
-- `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client.
+- `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client. `fetchVersion()` hits `/health` unauthenticated.
 - `src/lib/uploader.ts` — multipart upload with presigned URLs, 8 MiB parts, 4 concurrent PUT workers, abort support.
 - Pages: `Login.tsx`, `Files.tsx`, `Admin.tsx`.
 
@@ -50,6 +51,10 @@ Wails bindings regen: `cd desktop && wails generate module`
 - Wails app (Go + web frontend). Packages: `apiclient`, `sync`, `tray`, `settings`, `wsclient`, `desktopentry`.
 - Build tag `webkit2_41` required on Ubuntu 24.04+.
 - `app.go` — Wails-bound backend. All exported methods callable from frontend. Handles auth, file ops, sync folder management, settings, window lifecycle.
+  - `PickFile` returns `LocalFile{Key, Size}` — size used by frontend for diff conflict detection.
+  - `PickFolderForUpload` returns `[]LocalFile` with sizes.
+  - `UploadFolderPicked(skipKeys []string)` — skip list for diff uploads.
+  - `CancelUpload(key)` / `CancelUploads()` — per-file and batch cancel via `context.Context`.
 - **Sync engine** (`internal/sync/engine.go`) — fsnotify-driven reconcile loop. Per-folder upload/download toggles. Keeps a 200-entry log ring buffer for the history modal. `SetAPI()` / `ClearStatus()` for clean re-auth after token expiry.
 - **Settings** (`internal/settings/`) — JSON on disk, multi-environment (per API URL). Global flags: `startOnLaunch`, `closeToTray` (default true — window hides to tray on close, quit via tray menu).
 - **SSO handoff** — "Open Web" passes JWT via URL fragment (`#token=`), not query param. Web app consumes + scrubs immediately.
@@ -62,15 +67,17 @@ Wails bindings regen: `cd desktop && wails generate module`
 ## Key patterns
 
 - **Uploads**: browser → API (init, get presigned URLs) → browser PUTs parts direct to MinIO → API (complete). Quota reserved on init, released on complete/abort/GC.
+- **Upload quota on replace**: `uploadInit` deducts the existing file size from `usedBytes` before the quota check so replacing a large file with a slightly larger one is allowed. `uploadComplete` adds only the net delta `(newSize - oldSize)` to `usedBytes`.
 - **WebSocket push**: server publishes `files-changed` after mutations; SPA re-fetches file list (no deltas).
 - **Embedded SPA**: `webui.Mount()` must come after `srv.Register()` — Fiber matches in registration order, API routes take precedence.
 - **Integration tests**: use `testcontainers-go` to spin up real MinIO. Build tag `integration` required.
 - **Desktop login flow**: `Login()` must bounce the sync engine (`Stop` → `SetAPI` → `ClearStatus` → `Start`) so it picks up the fresh token and clears stale errors.
+- **Rename disk check**: `renameFile` calls `quota.DiskFree(cfg.DataDir)` before spawning the copy goroutine; rejects with `507` if `copySize + 1 GiB > free`. Rename is copy+delete (no S3 atomic rename), so it needs ~2× file size free temporarily.
+- **Shared code** (`shared/`): components and libs used by both web and desktop via `@shared` Vite/TS alias. Key exports: `LoadingBar`, `LoginCard`, `Logo`, `UploadCard`, `UploadProgressPanel`, `ReplaceDialog`, `PreviewContent`, `StorageStats`; libs: `format`, `tree`, `upload`, `loading`.
 
 ## Roadmap
 
 ### Quick wins
-- **Rename files/folders** — no endpoint yet, users must delete + re-upload
 - **WebSocket first-message auth** — WS currently connects as `/api/ws?token=<JWT>`; token appears in server access logs. Fix: connect without token, client sends `{"type":"auth","token":"..."}` as first message, server validates within a timeout (e.g. 10s) before accepting further messages. Requires bypassing JWT middleware on the WS route and handling auth inside `wsHandler`.
 
 ### Medium effort
@@ -86,5 +93,11 @@ Wails bindings regen: `cd desktop && wails generate module`
 - ~~**Create folder**~~ — `.keep` marker file in S3; filtered in `buildTree`, API returns all objects (web + desktop)
 - ~~**"Remember me" on web**~~ — always localStorage; checkbox persists across logout; desktop mirrors via settings JSON
 - ~~**Search/filter**~~ — client-side search bar over file keys (web + desktop)
-- ~~**Replace file warning**~~ — `ReplaceDialog` with end-truncated paths, collapsible list, keyboard support (web + desktop)
+- ~~**Replace file warning**~~ — `ReplaceDialog` with end-truncated paths, collapsible list, keyboard support; **Diff button** skips conflicts where local and remote size match (web + desktop)
 - ~~**Drag & drop upload (web)**~~ — files + folders onto tree; folder highlight + auto-expand on hover; root drop zone; shared upload pipeline with conflict detection
+- ~~**Rename files/folders**~~ — async copy+delete in S3; processing guard prevents concurrent ops; disk space pre-check (`507` if `copySize + 1 GiB > free`); rename error pushed via WebSocket
+- ~~**Upload card (web + desktop)**~~ — shared `UploadCard` + `UploadProgressPanel`; active/queued/done/ETA stats; per-file and cancel-all buttons; desktop cancel via `context.Context` threading through Go → MinIO PUT
+- ~~**Quota fix for replace**~~ — init deducts existing file size; complete applies net delta only
+- ~~**Shared UI**~~ — `shared/` directory with components + libs aliased as `@shared`; covers `LoadingBar`, `LoginCard`, `Logo` (with version), `ReplaceDialog`, `UploadCard`, `PreviewContent`, `StorageStats`, and libs `format`, `tree`, `upload`, `loading`
+- ~~**Harmonized login**~~ — shared `LoginCard` with logo + version; web fetches version from `/health`; desktop from `GetVersion()`; server field desktop-only; sign-in button disabled until login + password filled
+- ~~**Version in UI**~~ — `/health` exposes `version`; shown in navbar (web) and header bar (desktop); both login pages display it below the logo

@@ -11,6 +11,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yann/mist-drive/api/internal/events"
+	"github.com/yann/mist-drive/api/internal/quota"
+	"github.com/yann/mist-drive/api/internal/s3x"
 )
 
 func (s *Server) listFiles(c *fiber.Ctx) error {
@@ -258,13 +260,17 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true})
 	}
 
+	const renameMargin = 1 << 30 // 1 GiB safety buffer for the temporary copy
+
 	bucket := u.Bucket()
-	// Determine if source is a file or folder
-	_, statErr := s.S3.StatObject(c.Context(), bucket, oldPath)
+	// Determine if source is a file or folder; collect children for folders.
+	fileSize, statErr := s.S3.StatObject(c.Context(), bucket, oldPath)
 	isFile := statErr == nil
+	var folderObjs []s3x.ObjectInfo
 	if !isFile {
-		children, lerr := s.S3.ListObjects(c.Context(), bucket, oldPath+"/")
-		if lerr != nil || len(children) == 0 {
+		var lerr error
+		folderObjs, lerr = s.S3.ListObjects(c.Context(), bucket, oldPath+"/")
+		if lerr != nil || len(folderObjs) == 0 {
 			return fiber.NewError(fiber.StatusNotFound, "not found")
 		}
 	}
@@ -272,6 +278,23 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 	// Guard: reject if source is already being processed
 	if s.isProcessingBlocked(u.ID, oldPath) {
 		return fiber.NewError(fiber.StatusConflict, "resource is currently being processed")
+	}
+
+	// Disk space check: rename requires a temporary second copy of the data.
+	// Reject early if the server filesystem doesn't have enough free space.
+	if free := quota.DiskFree(s.Cfg.DataDir); free > 0 {
+		var copySize int64
+		if isFile {
+			copySize = fileSize
+		} else {
+			for _, o := range folderObjs {
+				copySize += o.Size
+			}
+		}
+		if copySize+renameMargin > free {
+			return fiber.NewError(fiber.StatusInsufficientStorage,
+				"not enough disk space to rename (would require a temporary copy)")
+		}
 	}
 
 	// Collision check
@@ -305,23 +328,17 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 				renameErr = s.S3.RemoveObject(ctx, bucket, oldPath)
 			}
 		} else {
-			// Snapshot before modifying
-			objs, lerr := s.S3.ListObjects(ctx, bucket, oldPath+"/")
-			if lerr != nil {
-				renameErr = lerr
-			} else {
-				oldKeys := make([]string, 0, len(objs))
-				for _, o := range objs {
-					dstKey := newPath + "/" + strings.TrimPrefix(o.Key, oldPath+"/")
-					if err := s.S3.CopyObject(ctx, bucket, o.Key, dstKey); err != nil {
-						renameErr = err
-						break
-					}
-					oldKeys = append(oldKeys, o.Key)
+			oldKeys := make([]string, 0, len(folderObjs))
+			for _, o := range folderObjs {
+				dstKey := newPath + "/" + strings.TrimPrefix(o.Key, oldPath+"/")
+				if err := s.S3.CopyObject(ctx, bucket, o.Key, dstKey); err != nil {
+					renameErr = err
+					break
 				}
-				if renameErr == nil {
-					renameErr = s.S3.RemoveObjects(ctx, bucket, oldKeys)
-				}
+				oldKeys = append(oldKeys, o.Key)
+			}
+			if renameErr == nil {
+				renameErr = s.S3.RemoveObjects(ctx, bucket, oldKeys)
 			}
 		}
 

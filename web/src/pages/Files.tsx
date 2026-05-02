@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent, PreviewResult } from '../lib/api'
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
-import ReplaceDialog from '../components/ReplaceDialog'
+import ReplaceDialog, { type ConflictEntry } from '../components/ReplaceDialog'
 import PreviewContent from '@shared/components/PreviewContent'
 import StorageStats from '@shared/components/StorageStats'
 import UploadCard from '@shared/components/UploadCard'
@@ -54,13 +54,13 @@ export default function Files() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [query, setQuery] = useState('')
   const [newFolder, setNewFolder] = useState<string | null>(null)
-  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
+  const [replaceConflicts, setReplaceConflicts] = useState<ConflictEntry[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
-  const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
+  const replaceResolve = useRef<((choice: 'replace' | 'diff' | 'cancel') => void) | null>(null)
   const confirm = useConfirm()
   const controllers = useRef<Map<string, AbortController>>(new Map())
   const cancelAll = useRef(false)
@@ -164,16 +164,23 @@ export default function Files() {
     if (jobs.length === 0) return
     setQueued(q => q + jobs.length)
 
-    const existingKeys = new Set(files.map(f => f.key))
-    const conflicts = jobs.map(j => j.key).filter(k => existingKeys.has(k))
+    const existingMap = new Map(files.map(f => [f.key, f.size]))
+    const conflicts: ConflictEntry[] = jobs
+      .filter(j => existingMap.has(j.key))
+      .map(j => ({ key: j.key, existingSize: existingMap.get(j.key)!, incomingSize: j.file.size }))
     if (conflicts.length > 0) {
-      const ok = await new Promise<boolean>(resolve => {
+      const choice = await new Promise<'replace' | 'diff' | 'cancel'>(resolve => {
         replaceResolve.current = resolve
         setReplaceConflicts(conflicts)
       })
-      if (!ok) {
+      if (choice === 'cancel') {
         setQueued(q => q - jobs.length)
         return
+      }
+      if (choice === 'diff') {
+        const skipKeys = new Set(conflicts.filter(c => c.existingSize === c.incomingSize).map(c => c.key))
+        jobs = jobs.filter(j => !skipKeys.has(j.key))
+        setQueued(q => q - (skipKeys.size))
       }
     }
 
@@ -477,8 +484,9 @@ export default function Files() {
     {replaceConflicts.length > 0 && (
       <ReplaceDialog
         conflicts={replaceConflicts}
-        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.(true) }}
-        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
+        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.('replace') }}
+        onDiff={() => { setReplaceConflicts([]); replaceResolve.current?.('diff') }}
+        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.('cancel') }}
       />
     )}
     {previewKey && (

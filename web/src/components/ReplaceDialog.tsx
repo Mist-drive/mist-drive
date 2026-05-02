@@ -1,1 +1,1 @@
-export { default } from '@shared/components/ReplaceDialog'
+export { default, type ConflictEntry } from '@shared/components/ReplaceDialog'

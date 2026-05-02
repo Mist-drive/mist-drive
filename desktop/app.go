@@ -316,25 +316,37 @@ func (a *App) findUploadingFolderForKey(key string) (settings.SyncFolder, string
 	return settings.SyncFolder{}, "", false
 }
 
-// PickFile opens a native file picker and returns the intended remote
-// key without uploading. The local path is stored internally so
-// UploadPicked can use it without exposing filesystem paths to JS.
-// Returns an empty string if the user cancelled.
-func (a *App) PickFile(remotePrefix string) (string, error) {
+// LocalFile is the JS-visible result of a file/folder pick. Key is the
+// intended remote path; Size is the local file size in bytes (used by the
+// frontend to detect same-size conflicts before uploading).
+type LocalFile struct {
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+}
+
+// PickFile opens a native file picker and returns the intended remote key
+// and local file size without uploading. The local path is stored internally
+// so UploadPicked can use it without exposing filesystem paths to JS.
+// Returns a zero-value LocalFile if the user cancelled.
+func (a *App) PickFile(remotePrefix string) (LocalFile, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Select a file to upload",
 	})
 	if err != nil || path == "" {
 		a.pickedLocalPath = ""
-		return "", err
+		return LocalFile{}, err
 	}
 	name := filepath.Base(path)
 	key := name
 	if remotePrefix != "" {
 		key = strings.TrimSuffix(remotePrefix, "/") + "/" + name
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return LocalFile{}, err
+	}
 	a.pickedLocalPath = path
-	return key, nil
+	return LocalFile{Key: key, Size: info.Size()}, nil
 }
 
 // emitUploadProgress sends an upload-progress event to the frontend.
@@ -427,10 +439,10 @@ func (a *App) UploadFile(remotePrefix string) (string, error) {
 }
 
 // PickFolderForUpload opens a directory picker and returns the remote keys
-// that would be created by uploading it, without uploading anything yet.
+// and sizes for all files in the folder, without uploading anything yet.
 // The caller uses this list to detect conflicts and show a replace dialog.
 // Returns nil/empty if the user cancelled. Call UploadFolderPicked to proceed.
-func (a *App) PickFolderForUpload(remotePrefix string) ([]string, error) {
+func (a *App) PickFolderForUpload(remotePrefix string) ([]LocalFile, error) {
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Select a folder to upload",
 	})
@@ -444,7 +456,7 @@ func (a *App) PickFolderForUpload(remotePrefix string) ([]string, error) {
 	if remotePrefix != "" {
 		prefix = strings.TrimSuffix(remotePrefix, "/") + "/" + base + "/"
 	}
-	var keys []string
+	var files []LocalFile
 	if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -452,21 +464,26 @@ func (a *App) PickFolderForUpload(remotePrefix string) ([]string, error) {
 		if d.IsDir() {
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		rel, _ := filepath.Rel(dir, path)
-		keys = append(keys, prefix+filepath.ToSlash(rel))
+		files = append(files, LocalFile{Key: prefix + filepath.ToSlash(rel), Size: info.Size()})
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	a.pickedFolderPath = dir
 	a.pickedFolderPrefix = prefix
-	return keys, nil
+	return files, nil
 }
 
 // UploadFolderPicked uploads the folder selected by the last PickFolderForUpload
-// call. Up to fileConcurrency files are uploaded in parallel; within each file
+// call. skipKeys is an optional set of remote keys to skip (used for diff uploads).
+// Up to fileConcurrency files are uploaded in parallel; within each file
 // the multipart-part concurrency comes from settings (MaxConcurrentUploads).
-func (a *App) UploadFolderPicked() error {
+func (a *App) UploadFolderPicked(skipKeys []string) error {
 	if a.pickedFolderPath == "" {
 		return fmt.Errorf("no folder picked")
 	}
@@ -474,6 +491,11 @@ func (a *App) UploadFolderPicked() error {
 	prefix := a.pickedFolderPrefix
 	defer func() { a.pickedFolderPath = ""; a.pickedFolderPrefix = "" }()
 	s := a.settings.Get()
+
+	skip := make(map[string]bool, len(skipKeys))
+	for _, k := range skipKeys {
+		skip[k] = true
+	}
 
 	// Collect jobs first so we can bound file-level concurrency.
 	type job struct{ local, key string }
@@ -486,7 +508,10 @@ func (a *App) UploadFolderPicked() error {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
-		jobs = append(jobs, job{path, prefix + filepath.ToSlash(rel)})
+		key := prefix + filepath.ToSlash(rel)
+		if !skip[key] {
+			jobs = append(jobs, job{path, key})
+		}
 		return nil
 	}); err != nil {
 		return err

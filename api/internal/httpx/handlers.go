@@ -38,7 +38,7 @@ type Server struct {
 }
 
 func (s *Server) Register(app *fiber.App) {
-	app.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	app.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true, "version": s.Version}) })
 	app.Post("/auth/login", s.login)
 
 	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret))

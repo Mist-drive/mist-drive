@@ -126,8 +126,8 @@ export function UploadFile(arg1) {
   return window['go']['main']['App']['UploadFile'](arg1);
 }
 
-export function UploadFolderPicked() {
-  return window['go']['main']['App']['UploadFolderPicked']();
+export function UploadFolderPicked(arg1) {
+  return window['go']['main']['App']['UploadFolderPicked'](arg1);
 }
 
 export function UploadPicked(arg1) {

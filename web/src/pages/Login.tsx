@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, setSession, isRemembered, getSavedLogin } from '../lib/api'
+import LoginCard from '@shared/components/LoginCard'
 
-export default function Login() {
+type Props = { version?: string }
+
+export default function Login({ version }: Props) {
   const nav = useNavigate()
   const [login, setLogin] = useState(getSavedLogin)
   const [password, setPassword] = useState('')
@@ -25,31 +28,18 @@ export default function Login() {
   }
 
   return (
-    <div className="login-wrap">
-      <form className="login-card" onSubmit={submit}>
-        <div className="logo" style={{ justifyContent: 'center', display: 'flex', marginBottom: '1rem' }}>
-          <span className="logo-dot" />
-          <span className="logo-text">MIST&nbsp;DRIVE</span>
-        </div>
-        <h2>Sign in</h2>
-        <label>Login</label>
-        <input value={login} onChange={e => setLogin(e.target.value)} autoFocus />
-        <label>Password</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
-        {err && <p className="error">{err}</p>}
-        <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '.5rem', cursor: 'pointer', marginTop: '.4rem' }}>
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={e => setRemember(e.target.checked)}
-            style={{ width: 'auto', margin: 0 }}
-          />
-          Remember me
-        </label>
-        <button disabled={busy} style={{ marginTop: '1.4rem', width: '100%' }}>
-          {busy ? 'Signing in...' : 'Login'}
-        </button>
-      </form>
-    </div>
+    <LoginCard
+      version={version}
+      login={login}
+      onLoginChange={setLogin}
+      password={password}
+      onPasswordChange={setPassword}
+      remember={remember}
+      onRememberChange={setRemember}
+      err={err}
+      busy={busy}
+      submitDisabled={!login || !password}
+      onSubmit={submit}
+    />
   )
 }

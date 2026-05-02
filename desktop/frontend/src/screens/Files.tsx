@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConfirm } from '../components/ConfirmDialog'
 import { fmt } from '@shared/lib/format'
+import { startLoading, endLoading } from '@shared/lib/loading'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 import {
   CancelUpload,
@@ -20,7 +21,7 @@ import {
   UploadFolderPicked,
   UploadPicked,
 } from '../../wailsjs/go/main/App'
-import ReplaceDialog from '../components/ReplaceDialog'
+import ReplaceDialog, { type ConflictEntry } from '../components/ReplaceDialog'
 import PreviewContent, { type PreviewResult } from '@shared/components/PreviewContent'
 import StorageStats from '@shared/components/StorageStats'
 import UploadCard from '@shared/components/UploadCard'
@@ -45,7 +46,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   const [editingValue, setEditingValue] = useState('')
   const [query, setQuery] = useState('')
   const [newFolder, setNewFolder] = useState<string | null>(null)
-  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
+  const [replaceConflicts, setReplaceConflicts] = useState<ConflictEntry[]>([])
   const [syncRoots, setSyncRoots] = useState<Set<string>>(new Set())
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
@@ -55,16 +56,18 @@ export default function Files({ onQuotaChange, user }: Props) {
   const [, setTick] = useState(0)
   const uploadTotalRef = useRef(0)
   const cancelledKeysRef = useRef<Set<string>>(new Set())
-  const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
+  const replaceResolve = useRef<((choice: 'replace' | 'diff' | 'cancel') => void) | null>(null)
   const confirm = useConfirm()
 
   const refresh = async () => {
+    startLoading()
     try {
       const resp = await ListFiles()
       setFiles(resp.objects || [])
       setProcessing(resp.processing || [])
     }
     catch (e: any) { setErr(String(e?.message ?? e)) }
+    finally { endLoading() }
   }
   useEffect(() => {
     refresh()
@@ -109,42 +112,51 @@ export default function Files({ onQuotaChange, user }: Props) {
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))
 
   const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
-    setBusy(label); setErr(null)
+    setBusy(label); setErr(null); startLoading()
     try { return await fn() }
     catch (e: any) { setErr(String(e?.message ?? e)); return null }
-    finally { setBusy(null) }
+    finally { setBusy(null); endLoading() }
   }
 
   const onUpload = async () => {
-    const key = await withBusy('Picking file…', () => PickFile(''))
-    if (!key) return
-    const conflict = files.some(f => f.key === key)
-    if (conflict) {
-      const ok = await new Promise<boolean>(resolve => {
+    const picked = await withBusy('Picking file…', () => PickFile(''))
+    if (!picked?.key) return
+    const existing = files.find(f => f.key === picked.key)
+    if (existing) {
+      const conflict: ConflictEntry = { key: picked.key, existingSize: existing.size, incomingSize: picked.size }
+      const choice = await new Promise<'replace' | 'diff' | 'cancel'>(resolve => {
         replaceResolve.current = resolve
-        setReplaceConflicts([key])
+        setReplaceConflicts([conflict])
       })
-      if (!ok) return
+      if (choice === 'cancel') return
+      if (choice === 'diff' && conflict.existingSize === conflict.incomingSize) return
     }
     cancelledKeysRef.current.clear(); uploadTotalRef.current = 1; setUploadDone(0)
-    await withBusy('Uploading…', () => UploadPicked(key))
+    await withBusy('Uploading…', () => UploadPicked(picked.key))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
   const onUploadFolder = async () => {
-    const keys = await withBusy('Picking folder…', () => PickFolderForUpload(''))
-    if (!keys || keys.length === 0) return
-    const conflicts = keys.filter(k => files.some(f => f.key === k))
+    const picked = await withBusy('Picking folder…', () => PickFolderForUpload(''))
+    if (!picked || picked.length === 0) return
+    const existingMap = new Map(files.map(f => [f.key, f.size]))
+    const conflicts: ConflictEntry[] = picked
+      .filter(p => existingMap.has(p.key))
+      .map(p => ({ key: p.key, existingSize: existingMap.get(p.key)!, incomingSize: p.size }))
+    let skipKeys: string[] = []
     if (conflicts.length > 0) {
-      const ok = await new Promise<boolean>(resolve => {
+      const choice = await new Promise<'replace' | 'diff' | 'cancel'>(resolve => {
         replaceResolve.current = resolve
         setReplaceConflicts(conflicts)
       })
-      if (!ok) return
+      if (choice === 'cancel') return
+      if (choice === 'diff') {
+        skipKeys = conflicts.filter(c => c.existingSize === c.incomingSize).map(c => c.key)
+      }
     }
-    cancelledKeysRef.current.clear(); uploadTotalRef.current = keys.length; setUploadDone(0)
-    await withBusy('Uploading folder…', () => UploadFolderPicked())
+    cancelledKeysRef.current.clear(); uploadTotalRef.current = picked.length - skipKeys.length; setUploadDone(0)
+    await withBusy('Uploading folder…', () => UploadFolderPicked(skipKeys))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
@@ -357,8 +369,9 @@ export default function Files({ onQuotaChange, user }: Props) {
     {replaceConflicts.length > 0 && (
       <ReplaceDialog
         conflicts={replaceConflicts}
-        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.(true) }}
-        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
+        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.('replace') }}
+        onDiff={() => { setReplaceConflicts([]); replaceResolve.current?.('diff') }}
+        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.('cancel') }}
       />
     )}
     {previewKey && (

@@ -88,6 +88,25 @@ export namespace apiclient {
 
 }
 
+export namespace main {
+	
+	export class LocalFile {
+	    key: string;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.size = source["size"];
+	    }
+	}
+
+}
+
 export namespace settings {
 	
 	export class SyncFolder {

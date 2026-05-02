@@ -1,5 +1,7 @@
 export type { PreviewResult } from '@shared/components/PreviewContent'
 import type { PreviewResult } from '@shared/components/PreviewContent'
+import { startLoading, endLoading } from '@shared/lib/loading'
+export { onLoading } from '@shared/lib/loading'
 
 export type PublicUser = {
   id: string
@@ -49,19 +51,6 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY)
 }
 
-// Global in-flight counter for the loading bar. We only instrument
-// `req()` — upload part PUTs go direct to MinIO via XHR and are tracked
-// separately by the progress panel, so there's no double-counting.
-let _inflight = 0
-const _loadingListeners = new Set<(n: number) => void>()
-function notifyLoading() {
-  _loadingListeners.forEach((l) => l(_inflight))
-}
-export function onLoading(l: (n: number) => void): () => void {
-  _loadingListeners.add(l)
-  l(_inflight)
-  return () => { _loadingListeners.delete(l) }
-}
 
 // Reconnecting WebSocket client for server-pushed events. We only use
 // it as a "refresh your view" signal — the server never sends deltas,
@@ -124,7 +113,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   headers.set('Content-Type', 'application/json')
   const tok = getToken()
   if (tok) headers.set('Authorization', `Bearer ${tok}`)
-  _inflight++; notifyLoading()
+  startLoading()
   try {
     const res = await fetch(path, { ...init, headers })
     if (!res.ok) {
@@ -133,7 +122,18 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     return res.json() as Promise<T>
   } finally {
-    _inflight--; notifyLoading()
+    endLoading()
+  }
+}
+
+export async function fetchVersion(): Promise<string> {
+  try {
+    const res = await fetch('/health')
+    if (!res.ok) return ''
+    const data = await res.json()
+    return data.version ?? ''
+  } catch {
+    return ''
   }
 }
 
