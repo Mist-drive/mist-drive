@@ -79,6 +79,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
+      - name: Install shared deps
+        run: cd shared && bun install --frozen-lockfile
+
       - name: Install frontend deps
         run: cd desktop/frontend && bun install
 

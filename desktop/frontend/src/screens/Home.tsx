@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react'
 import { GetVersion, Me, OpenWebApp } from '../../wailsjs/go/main/App'
 import { apiclient } from '../../wailsjs/go/models'
+import { fmt } from '@shared/lib/format'
 import Files from './Files'
 import SyncPanel from './Sync'
-
-function fmt(n: number) {
-  const u = ['B','KB','MB','GB','TB']; let i = 0
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
-  return `${n.toFixed(1)} ${u[i]}`
-}
 
 type Props = {
   user: apiclient.PublicUser

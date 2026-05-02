@@ -4,7 +4,6 @@ import { apiclient } from '../wailsjs/go/models'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoginScreen from './screens/Login'
 import Home from './screens/Home'
-import './App.css'
 
 // Boot flow: we have a stored JWT in settings.json ⇒ try Me().
 // If it succeeds, land on Home; otherwise show the Login screen.

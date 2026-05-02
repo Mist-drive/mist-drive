@@ -3,6 +3,8 @@ import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent } f
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
 import ReplaceDialog from '../components/ReplaceDialog'
+import { fmt } from '@shared/lib/format'
+import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 
 // webkitdirectory isn't in the default React HTMLInputAttributes type
 declare module 'react' {
@@ -12,11 +14,6 @@ declare module 'react' {
   }
 }
 
-function fmt(n: number) {
-  const u = ['B','KB','MB','GB','TB']; let i = 0
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
-  return `${n.toFixed(1)} ${u[i]}`
-}
 
 function fmtEta(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '—'
@@ -50,58 +47,6 @@ type UP = {
 
 const FILE_CONCURRENCY = 4
 
-type TreeNode = {
-  name: string
-  path: string
-  isDir: boolean
-  size: number
-  lastModified?: string
-  children?: Record<string, TreeNode>
-}
-
-function buildTree(files: ObjectInfo[]): TreeNode {
-  const root: TreeNode = { name: '', path: '', isDir: true, size: 0, children: {} }
-  for (const f of files) {
-    const parts = f.key.split('/').filter(Boolean)
-    let node = root
-    for (let i = 0; i < parts.length; i++) {
-      const isLeaf = i === parts.length - 1
-      const name = parts[i]
-      if (isLeaf && name === '.keep') break
-      node.children = node.children || {}
-      if (!node.children[name]) {
-        node.children[name] = {
-          name,
-          path: parts.slice(0, i + 1).join('/'),
-          isDir: !isLeaf,
-          size: 0,
-          children: isLeaf ? undefined : {},
-        }
-      }
-      node = node.children[name]
-      if (isLeaf) {
-        node.size = f.size
-        node.lastModified = f.lastModified
-      }
-    }
-  }
-  const sum = (n: TreeNode): number => {
-    if (!n.isDir) return n.size
-    let s = 0
-    for (const c of Object.values(n.children || {})) s += sum(c)
-    n.size = s
-    return s
-  }
-  sum(root)
-  return root
-}
-
-function sortedChildren(n: TreeNode): TreeNode[] {
-  return Object.values(n.children || {}).sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
-}
 
 async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   const all: FileSystemEntry[] = []
@@ -123,7 +68,7 @@ export default function Files() {
   const [files, setFiles] = useState<ObjectInfo[]>([])
   const [processing, setProcessing] = useState<string[]>([])
   const [me, setMe] = useState<PublicUser | null>(getUser())
-  const [recomputing, setRecomputing] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [editingPath, setEditingPath] = useState<string | null>(null)
   const [editingValue, setEditingValue] = useState('')
@@ -194,15 +139,15 @@ export default function Files() {
     })
   }, [])
 
-  const onRecompute = async () => {
-    setRecomputing(true)
+  const onRefresh = async () => {
+    setRefreshing(true)
     try {
       await api.recomputeUsage()
       await refresh()
     } catch (e: any) {
       setErr(e.message)
     } finally {
-      setRecomputing(false)
+      setRefreshing(false)
     }
   }
 
@@ -582,14 +527,14 @@ export default function Files() {
           {' · '}
           <a
             href="#"
-            onClick={(e) => { e.preventDefault(); if (!recomputing) onRecompute() }}
+            onClick={(e) => { e.preventDefault(); if (!refreshing) onRefresh() }}
             style={{
               color: 'var(--accent-blue)',
-              opacity: recomputing ? 0.5 : 1,
-              cursor: recomputing ? 'default' : 'pointer',
+              opacity: refreshing ? 0.5 : 1,
+              cursor: refreshing ? 'default' : 'pointer',
             }}
           >
-            {recomputing ? 'recomputing…' : 'recompute usage'}
+            {refreshing ? 'refreshing…' : 'refresh'}
           </a>
         </div>
       )}

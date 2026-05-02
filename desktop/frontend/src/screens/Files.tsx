@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConfirm } from '../components/ConfirmDialog'
+import { fmt } from '@shared/lib/format'
+import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 import {
   CreateFolder,
   DeleteFile,
@@ -17,65 +19,6 @@ import ReplaceDialog from '../components/ReplaceDialog'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 
-function fmt(n: number) {
-  const u = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
-  return `${n.toFixed(1)} ${u[i]}`
-}
-
-type TreeNode = {
-  name: string
-  path: string
-  isDir: boolean
-  size: number
-  lastModified?: string
-  children?: Record<string, TreeNode>
-}
-
-function buildTree(files: apiclient.ObjectInfo[]): TreeNode {
-  const root: TreeNode = { name: '', path: '', isDir: true, size: 0, children: {} }
-  for (const f of files) {
-    const parts = f.key.split('/').filter(Boolean)
-    let node = root
-    for (let i = 0; i < parts.length; i++) {
-      const leaf = i === parts.length - 1
-      const name = parts[i]
-      if (leaf && name === '.keep') break  // folder marker — create parent dirs but no file node
-      node.children = node.children || {}
-      if (!node.children[name]) {
-        node.children[name] = {
-          name,
-          path: parts.slice(0, i + 1).join('/'),
-          isDir: !leaf,
-          size: 0,
-          children: leaf ? undefined : {},
-        }
-      }
-      node = node.children[name]
-      if (leaf) {
-        node.size = f.size
-        node.lastModified = f.lastModified
-      }
-    }
-  }
-  const sum = (n: TreeNode): number => {
-    if (!n.isDir) return n.size
-    let s = 0
-    for (const c of Object.values(n.children || {})) s += sum(c)
-    n.size = s
-    return s
-  }
-  sum(root)
-  return root
-}
-
-function sortedChildren(n: TreeNode): TreeNode[] {
-  return Object.values(n.children || {}).sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
-}
 
 type Props = { onQuotaChange?: () => void }
 
@@ -175,8 +118,8 @@ export default function Files({ onQuotaChange }: Props) {
     await refresh()
   }
 
-  const onRecompute = async () => {
-    await withBusy('Recomputing…', () => RecomputeUsage())
+  const onRefresh = async () => {
+    await withBusy('Refreshing…', () => RecomputeUsage())
     onQuotaChange?.()
   }
 
@@ -300,10 +243,10 @@ export default function Files({ onQuotaChange }: Props) {
         color: 'var(--text-secondary)',
       }}>
         <a
-          onClick={(e) => { e.preventDefault(); onRecompute() }}
+          onClick={(e) => { e.preventDefault(); onRefresh() }}
           href="#"
           style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
-        >recompute usage</a>
+        >refresh</a>
       </div>
     </div>
     {replaceConflicts.length > 0 && (

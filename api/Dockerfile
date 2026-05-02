@@ -16,6 +16,8 @@ WORKDIR /src/web
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ ./
+COPY shared/ /src/shared/
+RUN cd /src/shared && bun install --frozen-lockfile
 RUN bun run build
 # Result lives at /src/web/dist
 
