@@ -245,11 +245,14 @@ func TestIntegration_UploadDownloadDeleteFlow(t *testing.T) {
 
 	// ---- list ----
 	lResp := f.do(t, "GET", "/api/files/", nil)
-	var objs []struct {
-		Key  string `json:"key"`
-		Size int64  `json:"size"`
+	var listBody struct {
+		Objects []struct {
+			Key  string `json:"key"`
+			Size int64  `json:"size"`
+		} `json:"objects"`
 	}
-	json.NewDecoder(lResp.Body).Decode(&objs)
+	json.NewDecoder(lResp.Body).Decode(&listBody)
+	objs := listBody.Objects
 	if len(objs) != 1 || objs[0].Key != "hello.txt" || objs[0].Size != int64(size) {
 		t.Fatalf("list: %+v", objs)
 	}
