@@ -23,6 +23,11 @@ export default function App() {
 
   return (
     <ConfirmProvider>
+      <div className="background" aria-hidden>
+        <div className="gradient gradient-1" />
+        <div className="gradient gradient-2" />
+        <div className="gradient gradient-3" />
+      </div>
       {!user ? (
         <LoginScreen
           onLogin={async (url, login, password, rememberLogin) => {

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"mist-drive-desktop/internal/apiclient"
@@ -34,6 +36,16 @@ type App struct {
 	// pickedLocalPath holds the local file path from the last PickFile
 	// call so UploadPicked can retrieve it without exposing it to JS.
 	pickedLocalPath string
+	// pickedFolderPath / pickedFolderPrefix hold state from the last
+	// PickFolderForUpload call so UploadFolderPicked can execute the walk
+	// without re-exposing filesystem paths to JS.
+	pickedFolderPath   string
+	pickedFolderPrefix string
+	// batchMu guards batchCancel. fileCtxMu guards fileCtxs.
+	batchMu    sync.Mutex
+	batchCancel context.CancelFunc
+	fileCtxMu  sync.Mutex
+	fileCtxs   map[string]context.CancelFunc
 }
 
 func NewApp(ver string) *App {
@@ -225,8 +237,20 @@ func (a *App) ListFiles() (apiclient.ListResponse, error) {
 	return a.api.ListFiles()
 }
 
-// RenameFile renames a file or folder at the given path to the new name.
+// RenameFile renames a file or folder. If the path lives under an
+// upload-enabled sync folder, the rename is applied locally and the
+// sync engine detects it — consistent with how DeleteFile works.
+// For files outside any sync folder the API rename is used directly.
 func (a *App) RenameFile(path, newName string) error {
+	if f, rel, ok := a.findUploadingFolderForKey(path); ok {
+		oldLocal := filepath.Join(f.Local, filepath.FromSlash(rel))
+		newLocal := filepath.Join(filepath.Dir(oldLocal), newName)
+		if err := os.Rename(oldLocal, newLocal); err != nil {
+			return fmt.Errorf("local rename: %w", err)
+		}
+		a.engine.Nudge()
+		return nil
+	}
 	return a.api.Rename(path, newName)
 }
 
@@ -313,14 +337,67 @@ func (a *App) PickFile(remotePrefix string) (string, error) {
 	return key, nil
 }
 
+// emitUploadProgress sends an upload-progress event to the frontend.
+func (a *App) emitUploadProgress(key string, loaded, total int64, done bool) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "upload-progress", map[string]any{
+		"key": key, "loaded": loaded, "total": total, "done": done,
+	})
+}
+
+func (a *App) makeProgressFn(key string) apiclient.ProgressFunc {
+	return func(loaded, total int64) {
+		a.emitUploadProgress(key, loaded, total, false)
+	}
+}
+
+// CancelUploads cancels every in-flight upload in the current batch by
+// cancelling the shared batch context. In-flight S3 PUTs are aborted
+// immediately via the request context.
+func (a *App) CancelUploads() {
+	a.batchMu.Lock()
+	defer a.batchMu.Unlock()
+	if a.batchCancel != nil {
+		a.batchCancel()
+	}
+}
+
+// CancelUpload cancels the upload for a single key without affecting other
+// files in the same batch. No-op if the key is not currently uploading.
+func (a *App) CancelUpload(key string) {
+	a.fileCtxMu.Lock()
+	defer a.fileCtxMu.Unlock()
+	if cancel, ok := a.fileCtxs[key]; ok {
+		cancel()
+		delete(a.fileCtxs, key)
+	}
+}
+
 // UploadPicked uploads the file selected by the last PickFile call.
 func (a *App) UploadPicked(key string) error {
 	if a.pickedLocalPath == "" {
 		return fmt.Errorf("no file picked")
 	}
-	defer func() { a.pickedLocalPath = "" }()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.batchMu.Lock()
+	a.batchCancel = cancel
+	a.batchMu.Unlock()
+	a.fileCtxMu.Lock()
+	a.fileCtxs = map[string]context.CancelFunc{key: cancel}
+	a.fileCtxMu.Unlock()
+	defer func() {
+		cancel()
+		a.pickedLocalPath = ""
+		a.emitUploadProgress(key, 0, 0, true)
+	}()
 	s := a.settings.Get()
-	return a.api.UploadFile(a.pickedLocalPath, key, s.MaxConcurrentUploads)
+	err := a.api.UploadFileWithProgress(ctx, a.pickedLocalPath, key, s.MaxConcurrentUploads, a.makeProgressFn(key))
+	if ctx.Err() != nil {
+		return nil // user-initiated cancel, not an error
+	}
+	return err
 }
 
 // UploadFile opens a native file picker and uploads the selected file
@@ -342,10 +419,137 @@ func (a *App) UploadFile(remotePrefix string) (string, error) {
 		key = strings.TrimSuffix(remotePrefix, "/") + "/" + name
 	}
 	s := a.settings.Get()
-	if err := a.api.UploadFile(path, key, s.MaxConcurrentUploads); err != nil {
+	defer a.emitUploadProgress(key, 0, 0, true)
+	if err := a.api.UploadFileWithProgress(context.Background(), path, key, s.MaxConcurrentUploads, a.makeProgressFn(key)); err != nil {
 		return "", err
 	}
 	return key, nil
+}
+
+// PickFolderForUpload opens a directory picker and returns the remote keys
+// that would be created by uploading it, without uploading anything yet.
+// The caller uses this list to detect conflicts and show a replace dialog.
+// Returns nil/empty if the user cancelled. Call UploadFolderPicked to proceed.
+func (a *App) PickFolderForUpload(remotePrefix string) ([]string, error) {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select a folder to upload",
+	})
+	if err != nil || dir == "" {
+		a.pickedFolderPath = ""
+		a.pickedFolderPrefix = ""
+		return nil, err
+	}
+	base := filepath.Base(dir)
+	prefix := base + "/"
+	if remotePrefix != "" {
+		prefix = strings.TrimSuffix(remotePrefix, "/") + "/" + base + "/"
+	}
+	var keys []string
+	if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		keys = append(keys, prefix+filepath.ToSlash(rel))
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	a.pickedFolderPath = dir
+	a.pickedFolderPrefix = prefix
+	return keys, nil
+}
+
+// UploadFolderPicked uploads the folder selected by the last PickFolderForUpload
+// call. Up to fileConcurrency files are uploaded in parallel; within each file
+// the multipart-part concurrency comes from settings (MaxConcurrentUploads).
+func (a *App) UploadFolderPicked() error {
+	if a.pickedFolderPath == "" {
+		return fmt.Errorf("no folder picked")
+	}
+	dir := a.pickedFolderPath
+	prefix := a.pickedFolderPrefix
+	defer func() { a.pickedFolderPath = ""; a.pickedFolderPrefix = "" }()
+	s := a.settings.Get()
+
+	// Collect jobs first so we can bound file-level concurrency.
+	type job struct{ local, key string }
+	var jobs []job
+	if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		jobs = append(jobs, job{path, prefix + filepath.ToSlash(rel)})
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	batchCtx, batchCancel := context.WithCancel(context.Background())
+	a.batchMu.Lock()
+	a.batchCancel = batchCancel
+	a.batchMu.Unlock()
+	a.fileCtxMu.Lock()
+	a.fileCtxs = make(map[string]context.CancelFunc)
+	a.fileCtxMu.Unlock()
+	defer batchCancel()
+
+	const fileConcurrency = 4
+	sem := make(chan struct{}, fileConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for _, j := range jobs {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			// Per-file context so individual files can be cancelled without
+			// stopping the whole batch.
+			fileCtx, fileCancel := context.WithCancel(batchCtx)
+			a.fileCtxMu.Lock()
+			a.fileCtxs[j.key] = fileCancel
+			a.fileCtxMu.Unlock()
+			defer func() {
+				fileCancel()
+				a.fileCtxMu.Lock()
+				delete(a.fileCtxs, j.key)
+				a.fileCtxMu.Unlock()
+				a.emitUploadProgress(j.key, 0, 0, true)
+			}()
+
+			mu.Lock()
+			if firstErr != nil {
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
+
+			err := a.api.UploadFileWithProgress(fileCtx, j.local, j.key, s.MaxConcurrentUploads, a.makeProgressFn(j.key))
+			if err != nil && fileCtx.Err() == nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(j)
+	}
+	wg.Wait()
+	if batchCtx.Err() != nil {
+		return nil // user-initiated cancel, not an error
+	}
+	return firstErr
 }
 
 // --- sync folders ---

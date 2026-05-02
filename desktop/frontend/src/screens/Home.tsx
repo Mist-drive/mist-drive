@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { GetVersion, Me, OpenWebApp } from '../../wailsjs/go/main/App'
 import { apiclient } from '../../wailsjs/go/models'
-import { fmt } from '@shared/lib/format'
+import Logo from '@shared/components/Logo'
 import Files from './Files'
 import SyncPanel from './Sync'
 
@@ -40,28 +40,16 @@ export default function Home({ user: initial, onLogout }: Props) {
   return (
     <div className="home">
       <div className="navbar">
-        <div className="logo">
-          <span className="logo-dot" />
-          <span className="logo-text">MIST&nbsp;DRIVE</span>
-          {version && (
-            <span
-              className="muted"
-              style={{ marginLeft: '.5rem', fontSize: '0.7rem', letterSpacing: 0 }}
-              title="Build version"
-            >{version}</span>
-          )}
-        </div>
+        <Logo version={version || undefined} />
         <button style={tabStyle('files')} onClick={() => setTab('files')}>Files</button>
         <button style={tabStyle('sync')} onClick={() => setTab('sync')}>Sync</button>
         <button style={tabStyle('files')} onClick={() => OpenWebApp()}>Web ↗</button>
         <div className="spacer" />
-        <span className="muted">
-          {user.login} · {fmt(user.usedBytes)} / {fmt(user.quotaBytes)}
-        </span>
+        <span className="muted">{user.login}</span>
         <button className="ghost" onClick={onLogout}>Logout</button>
       </div>
       <div className="layout">
-        {tab === 'files' && <Files onQuotaChange={refreshQuota} />}
+        {tab === 'files' && <Files onQuotaChange={refreshQuota} user={user} />}
         {tab === 'sync' && <SyncPanel />}
       </div>
     </div>

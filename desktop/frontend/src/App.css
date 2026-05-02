@@ -36,7 +36,7 @@ select option { background: var(--bg-card); color: var(--text-primary); padding:
 .login-card button[type="submit"] { width: 100%; margin-top: 1.2rem; padding: .8rem; }
 
 /* Compact sizing for desktop window */
-.layout { max-width: 900px; }
+.layout { max-width: 80%; }
 .login-wrap { min-height: 100vh; }
 table { border-radius: 12px; }
 th, td { padding: .75rem 1rem; font-size: 0.9rem; }

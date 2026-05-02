@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -62,6 +63,28 @@ func (lr *limitedReader) Read(p []byte) (int, error) {
 		// is fine — we never expect the limiter to be cancelled and the
 		// http.Client Timeout will bound wall-clock time anyway.
 		_ = lr.lim.WaitN(context.Background(), n)
+	}
+	return n, err
+}
+
+// ProgressFunc reports upload progress. Called concurrently from part
+// goroutines; implementations must be safe for concurrent use.
+type ProgressFunc func(loaded, total int64)
+
+// progressReader counts bytes read into a shared atomic slot and fires
+// a throttled aggregator so concurrent parts collapse into one callback
+// no more than once per ~80ms.
+type progressReader struct {
+	r    io.Reader
+	slot *atomic.Int64 // per-part bytes transferred
+	fn   func()        // throttled aggregator
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	if n > 0 {
+		pr.slot.Add(int64(n))
+		pr.fn()
 	}
 	return n, err
 }
@@ -359,11 +382,16 @@ type completeReq struct {
 }
 
 // UploadFile runs the full init / parallel PUT / complete flow for one
-// local file. Concurrency and rate limits come from settings; for now
-// we honour maxConcurrentParts (falls back to 4). Rate limiting is a
-// phase-3 concern (it applies across the whole sync engine, not just
-// one-off UI uploads), so we leave a TODO hook here.
+// local file. It satisfies the sync.API interface (no progress callback).
 func (c *Client) UploadFile(localPath, remoteKey string, maxConcurrentParts int) error {
+	return c.UploadFileWithProgress(context.Background(), localPath, remoteKey, maxConcurrentParts, nil)
+}
+
+// UploadFileWithProgress is the same as UploadFile but accepts a context
+// for cancellation and an optional progress callback.
+// onProgress may be nil. It is called from concurrent goroutines and
+// is throttled to at most once per ~80ms to avoid event flooding.
+func (c *Client) UploadFileWithProgress(ctx context.Context, localPath, remoteKey string, maxConcurrentParts int, onProgress ProgressFunc) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -380,6 +408,29 @@ func (c *Client) UploadFile(localPath, remoteKey string, maxConcurrentParts int)
 		Key: remoteKey, Size: size, PartSize: uploadPartSize,
 	}, &initResp); err != nil {
 		return err
+	}
+
+	// Per-part atomic counters for progress aggregation.
+	slots := make([]atomic.Int64, len(initResp.URLs))
+	var throttleMu sync.Mutex
+	var lastEmit time.Time
+	report := func() {
+		if onProgress == nil {
+			return
+		}
+		now := time.Now()
+		throttleMu.Lock()
+		if now.Sub(lastEmit) < 80*time.Millisecond {
+			throttleMu.Unlock()
+			return
+		}
+		lastEmit = now
+		throttleMu.Unlock()
+		var loaded int64
+		for i := range slots {
+			loaded += slots[i].Load()
+		}
+		onProgress(loaded, size)
 	}
 
 	parts := make([]completedPart, len(initResp.URLs))
@@ -404,18 +455,21 @@ func (c *Client) UploadFile(localPath, remoteKey string, maxConcurrentParts int)
 		go func(i int, p partURL) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if firstErr != nil {
+			if firstErr != nil || ctx.Err() != nil {
 				return
 			}
 			start := int64(i) * initResp.PartSize
-			end := start + initResp.PartSize
-			if end > size {
-				end = size
-			}
+			end := min(start+initResp.PartSize, size)
 			// Give each part its own SectionReader so concurrent reads
 			// don't fight over the underlying file offset.
-			sr := io.NewSectionReader(f, start, end-start)
-			etag, err := c.putPart(p.URL, sr, end-start)
+			var body io.Reader = io.NewSectionReader(f, start, end-start)
+			if onProgress != nil {
+				body = &progressReader{r: body, slot: &slots[i], fn: report}
+			}
+			if c.uploadLimiter != nil {
+				body = &limitedReader{r: body, lim: c.uploadLimiter}
+			}
+			etag, err := c.putPart(ctx, p.URL, body, end-start)
 			if err != nil {
 				setErr(err)
 				return
@@ -427,18 +481,20 @@ func (c *Client) UploadFile(localPath, remoteKey string, maxConcurrentParts int)
 
 	if firstErr != nil {
 		// Best-effort abort so the server releases the quota reservation.
+		// Uses a fresh background context — the upload ctx may be cancelled.
 		_ = c.do("POST", "/api/files/upload/abort", map[string]string{"uploadId": initResp.UploadID}, nil)
 		return firstErr
+	}
+	if ctx.Err() != nil {
+		_ = c.do("POST", "/api/files/upload/abort", map[string]string{"uploadId": initResp.UploadID}, nil)
+		return ctx.Err()
 	}
 	return c.do("POST", "/api/files/upload/complete",
 		completeReq{UploadID: initResp.UploadID, Parts: parts}, nil)
 }
 
-func (c *Client) putPart(url string, body io.Reader, size int64) (string, error) {
-	if c.uploadLimiter != nil {
-		body = &limitedReader{r: body, lim: c.uploadLimiter}
-	}
-	req, err := http.NewRequest("PUT", url, body)
+func (c *Client) putPart(ctx context.Context, url string, body io.Reader, size int64) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, body)
 	if err != nil {
 		return "", err
 	}

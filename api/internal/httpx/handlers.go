@@ -127,6 +127,17 @@ func (s *Server) isProcessingBlocked(userID, key string) bool {
 	return false
 }
 
+// AddProcessing is the exported wrapper for addProcessing (used by tests).
+func (s *Server) AddProcessing(userID, prefix string) { s.addProcessing(userID, prefix) }
+
+// RemoveProcessing is the exported wrapper for removeProcessing (used by tests).
+func (s *Server) RemoveProcessing(userID, prefix string) { s.removeProcessing(userID, prefix) }
+
+// IsProcessingBlocked is the exported wrapper for isProcessingBlocked (used by tests).
+func (s *Server) IsProcessingBlocked(userID, key string) bool {
+	return s.isProcessingBlocked(userID, key)
+}
+
 func (s *Server) listProcessing(userID string) []string {
 	s.procMu.RLock()
 	defer s.procMu.RUnlock()

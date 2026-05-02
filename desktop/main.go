@@ -73,8 +73,8 @@ func main() {
 		Title:     "Mist Drive",
 		Width:     1024,
 		Height:    768,
-		MinWidth:  800,
-		MinHeight: 600,
+		MinWidth:  1024,
+		MinHeight: 768,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -84,7 +84,7 @@ func main() {
 		// of exiting. The tray's Quit menu sets forceQuit first, which
 		// lets the next close through.
 		OnBeforeClose: app.beforeClose,
-		Bind: []interface{}{
+		Bind: []any{
 			app,
 		},
 	})

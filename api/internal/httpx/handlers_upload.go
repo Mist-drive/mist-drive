@@ -39,7 +39,12 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 	if s.isProcessingBlocked(u.ID, r.Key) {
 		return fiber.NewError(fiber.StatusConflict, "destination is currently being processed")
 	}
-	if !s.Reservations.TryReserve(u.ID, r.Size, u.UsedBytes, u.QuotaBytes) {
+	// When replacing an existing file the quota check must consider only the
+	// net size change (newSize - existingSize), not the full newSize, because
+	// the old object is removed when the multipart upload completes.
+	existingSize, _ := s.S3.StatObject(c.Context(), u.Bucket(), r.Key)
+	effectiveUsed := max(int64(0), u.UsedBytes-existingSize)
+	if !s.Reservations.TryReserve(u.ID, r.Size, effectiveUsed, u.QuotaBytes) {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "quota exceeded")
 	}
 	if free := quota.DiskFree(s.Cfg.DataDir); free > 0 && r.Size > free {
@@ -80,12 +85,15 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "upload not found")
 	}
+	// Stat the existing object before completing — CompleteMultipart
+	// atomically replaces it, so this is the only window to read the old size.
+	oldSize, _ := s.S3.StatObject(c.Context(), st.Bucket, st.Key)
 	if err := s.S3.CompleteMultipart(c.Context(), st.Bucket, st.Key, st.UploadID, r.Parts); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	size, err := s.S3.StatObject(c.Context(), st.Bucket, st.Key)
 	if err == nil {
-		_ = s.Users.AddUsedBytes(u.ID, size)
+		_ = s.Users.AddUsedBytes(u.ID, size-oldSize)
 	}
 	s.Reservations.Release(u.ID, st.Size)
 	_ = s.Uploads.Delete(u.ID, r.UploadID)

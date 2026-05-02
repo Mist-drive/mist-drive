@@ -80,17 +80,15 @@ func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
 	_ = s.Create(newTestUser("id1", "alice"))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			u, err := s.GetByID("id1")
 			if err != nil {
 				return
 			}
 			u.UsedBytes++
 			_ = s.Update(u)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -107,5 +105,34 @@ func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
 	// Sanity: the underlying file exists and is well-formed JSON.
 	if _, err := filepath.Glob(filepath.Join(dir, "users", "*.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStore_ListReturnsAllUsers(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	_ = s.Create(newTestUser("id-a", "user-a"))
+	_ = s.Create(newTestUser("id-b", "user-b"))
+	_ = s.Create(newTestUser("id-c", "user-c"))
+
+	all := s.List()
+	if len(all) != 3 {
+		t.Fatalf("List() returned %d users, want 3", len(all))
+	}
+}
+
+func TestStore_GetByIDNotFound(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	_, err := s.GetByID("nope")
+	if err != ErrNotFound {
+		t.Fatalf("GetByID(unknown) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStore_UpdateNonExistent(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	ghost := newTestUser("ghost-id", "ghost")
+	err := s.Update(ghost)
+	if err == nil {
+		t.Fatal("Update on non-existent user should return error, got nil")
 	}
 }

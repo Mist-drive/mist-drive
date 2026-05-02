@@ -6,6 +6,10 @@ import {sync} from '../models';
 
 export function AddSyncFolder():Promise<settings.SyncFolder>;
 
+export function CancelUpload(arg1:string):Promise<void>;
+
+export function CancelUploads():Promise<void>;
+
 export function CreateFolder(arg1:string):Promise<void>;
 
 export function DeleteFile(arg1:string):Promise<void>;
@@ -34,6 +38,8 @@ export function OpenWebApp():Promise<void>;
 
 export function PickFile(arg1:string):Promise<string>;
 
+export function PickFolderForUpload(arg1:string):Promise<Array<string>>;
+
 export function PreviewFile(arg1:string):Promise<apiclient.PreviewResult>;
 
 export function RecomputeUsage():Promise<number>;
@@ -59,5 +65,7 @@ export function SyncHistory():Promise<Array<sync.LogEntry>>;
 export function SyncStatus():Promise<sync.Status>;
 
 export function UploadFile(arg1:string):Promise<string>;
+
+export function UploadFolderPicked():Promise<void>;
 
 export function UploadPicked(arg1:string):Promise<void>;

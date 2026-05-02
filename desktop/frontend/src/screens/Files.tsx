@@ -3,6 +3,8 @@ import { useConfirm } from '../components/ConfirmDialog'
 import { fmt } from '@shared/lib/format'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 import {
+  CancelUpload,
+  CancelUploads,
   CreateFolder,
   DeleteFile,
   DeleteFolder,
@@ -11,23 +13,28 @@ import {
   GetSettings,
   ListFiles,
   PickFile,
+  PickFolderForUpload,
   PreviewFile,
   RecomputeUsage,
   RenameFile,
+  UploadFolderPicked,
   UploadPicked,
 } from '../../wailsjs/go/main/App'
 import ReplaceDialog from '../components/ReplaceDialog'
 import PreviewContent, { type PreviewResult } from '@shared/components/PreviewContent'
+import StorageStats from '@shared/components/StorageStats'
+import UploadCard from '@shared/components/UploadCard'
+import { type UploadEntry } from '@shared/lib/upload'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 
-type Props = { onQuotaChange?: () => void }
+type Props = { onQuotaChange?: () => void; user: apiclient.PublicUser }
 
 // Phase-2 file browser. Mirrors the web UI's tree view but all the
 // actual HTTP / multipart work happens in Go via Wails bindings — the
 // JWT never leaves the Go side.
-export default function Files({ onQuotaChange }: Props) {
+export default function Files({ onQuotaChange, user }: Props) {
   const [files, setFiles] = useState<apiclient.ObjectInfo[]>([])
   const [processing, setProcessing] = useState<string[]>([])
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -43,6 +50,11 @@ export default function Files({ onQuotaChange }: Props) {
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [uploadActive, setUploadActive] = useState<Record<string, UploadEntry>>({})
+  const [uploadDone, setUploadDone] = useState(0)
+  const [, setTick] = useState(0)
+  const uploadTotalRef = useRef(0)
+  const cancelledKeysRef = useRef<Set<string>>(new Set())
   const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
   const confirm = useConfirm()
 
@@ -64,8 +76,35 @@ export default function Files({ onQuotaChange }: Props) {
       setRenameErr(`Rename failed for "${path}": ${message}`)
       refresh()
     })
-    return () => { unsubChange(); unsubErr() }
+    const unsubProgress = EventsOn('upload-progress', (ev: { key: string; loaded: number; total: number; done: boolean }) => {
+      if (cancelledKeysRef.current.has(ev.key)) return
+      if (ev.done) {
+        setUploadDone(n => n + 1)
+        setUploadActive(a => { const { [ev.key]: _, ...rest } = a; return rest })
+        return
+      }
+      setUploadActive((a) => {
+        const existing = a[ev.key]
+        return {
+          ...a,
+          [ev.key]: {
+            key: ev.key,
+            loaded: ev.loaded,
+            total: ev.total,
+            startedAt: existing?.startedAt ?? Date.now(),
+            pct: Math.round((ev.loaded / ev.total) * 100),
+          },
+        }
+      })
+    })
+    return () => { unsubChange(); unsubErr(); unsubProgress() }
   }, [])
+
+  useEffect(() => {
+    if (Object.keys(uploadActive).length === 0) return
+    const t = setInterval(() => setTick((n) => n + 1), 500)
+    return () => clearInterval(t)
+  }, [uploadActive])
 
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))
 
@@ -87,10 +126,30 @@ export default function Files({ onQuotaChange }: Props) {
       })
       if (!ok) return
     }
+    cancelledKeysRef.current.clear(); uploadTotalRef.current = 1; setUploadDone(0)
     await withBusy('Uploading…', () => UploadPicked(key))
+    setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
+  const onUploadFolder = async () => {
+    const keys = await withBusy('Picking folder…', () => PickFolderForUpload(''))
+    if (!keys || keys.length === 0) return
+    const conflicts = keys.filter(k => files.some(f => f.key === k))
+    if (conflicts.length > 0) {
+      const ok = await new Promise<boolean>(resolve => {
+        replaceResolve.current = resolve
+        setReplaceConflicts(conflicts)
+      })
+      if (!ok) return
+    }
+    cancelledKeysRef.current.clear(); uploadTotalRef.current = keys.length; setUploadDone(0)
+    await withBusy('Uploading folder…', () => UploadFolderPicked())
+    setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
+    await refresh()
+    onQuotaChange?.()
+  }
+
   const onDownload = async (key: string) => {
     const dest = await withBusy('Downloading…', () => DownloadFile(key))
     if (dest) setBusy(`Saved to ${dest}`)
@@ -121,6 +180,20 @@ export default function Files({ onQuotaChange }: Props) {
     await withBusy('Creating folder…', () => CreateFolder(newFolder.trim()))
     setNewFolder(null)
     await refresh()
+  }
+
+  const onCancelOne = (key: string) => {
+    cancelledKeysRef.current.add(key)
+    setUploadActive(a => { const { [key]: _, ...rest } = a; return rest })
+    CancelUpload(key)
+  }
+
+  const onCancelAll = () => {
+    setUploadActive(a => {
+      for (const key of Object.keys(a)) cancelledKeysRef.current.add(key)
+      return {}
+    })
+    CancelUploads()
   }
 
   const onRefresh = async () => {
@@ -165,6 +238,14 @@ export default function Files({ onQuotaChange }: Props) {
   // Client-side search: case-insensitive substring match on the full
   // key. The whole listing is already in memory so there's no reason
   // to round-trip the API — mirrors the web UI's behavior.
+  const folderSet = new Set<string>()
+  for (const f of files) {
+    const parts = f.key.split('/').filter(Boolean)
+    for (let i = 1; i < parts.length; i++) folderSet.add(parts.slice(0, i).join('/'))
+  }
+  const totalFiles = files.filter(f => !f.key.endsWith('/.keep')).length
+  const totalFolders = folderSet.size
+
   const q = query.trim().toLowerCase()
   const filteredFiles = q
     ? files.filter((f) => f.key.toLowerCase().includes(q))
@@ -186,17 +267,26 @@ export default function Files({ onQuotaChange }: Props) {
 
   return (
     <>
-    <div className="card">
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <h3 style={{ margin: 0 }}>Files</h3>
-        <div className="row" style={{ gap: '.5rem' }}>
+    <div>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '.5rem' }}>
+        <div style={{ flex: 1 }}>
+          {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+          {renameErr && <p className="error" style={{ margin: 0 }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
+        </div>
+        <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
           {busy && <span className="muted">{busy}</span>}
           <button className="ghost" onClick={() => setNewFolder('')} disabled={!!busy}>New folder</button>
           <button className="ghost" onClick={onUpload} disabled={!!busy}>Upload file</button>
+          <button className="ghost" onClick={onUploadFolder} disabled={!!busy}>Upload folder</button>
         </div>
       </div>
-      {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
-      {renameErr && <p className="error" style={{ marginBottom: '.8rem' }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
+      <UploadCard
+        entries={Object.values(uploadActive)}
+        queued={Math.max(0, uploadTotalRef.current - Object.keys(uploadActive).length - uploadDone)}
+        done={uploadDone}
+        onCancelAll={onCancelAll}
+        onCancelOne={onCancelOne}
+      />
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
@@ -255,18 +345,14 @@ export default function Files({ onQuotaChange }: Props) {
           {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview)}
         </tbody>
       </table>
-      <div style={{
-        textAlign: 'center',
-        marginTop: '1rem',
-        fontSize: '0.82rem',
-        color: 'var(--text-secondary)',
-      }}>
-        <a
-          onClick={(e) => { e.preventDefault(); onRefresh() }}
-          href="#"
-          style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
-        >refresh</a>
-      </div>
+      <StorageStats
+        usedBytes={user.usedBytes}
+        quotaBytes={user.quotaBytes}
+        totalFiles={totalFiles}
+        totalFolders={totalFolders}
+        onRefresh={onRefresh}
+        refreshing={busy === 'Refreshing…'}
+      />
     </div>
     {replaceConflicts.length > 0 && (
       <ReplaceDialog

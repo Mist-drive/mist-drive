@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { clearSession, getUser } from './lib/api'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from './components/LoadingBar'
+import Logo from '@shared/components/Logo'
 import Login from './pages/Login'
 import Files from './pages/Files'
 import Admin from './pages/Admin'
@@ -24,10 +25,7 @@ function Nav() {
   const activeStyle = { color: 'var(--text-primary)' }
   return (
     <div className="navbar">
-      <div className="logo">
-        <span className="logo-dot" />
-        <span className="logo-text">MIST&nbsp;DRIVE</span>
-      </div>
+      <Logo />
       <a href="/files" style={loc.pathname.startsWith('/files') ? activeStyle : undefined}>Files</a>
       {u.role === 'admin' && (
         <a href="/admin" style={loc.pathname.startsWith('/admin') ? activeStyle : undefined}>Admin</a>

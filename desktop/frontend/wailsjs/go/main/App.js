@@ -6,6 +6,14 @@ export function AddSyncFolder() {
   return window['go']['main']['App']['AddSyncFolder']();
 }
 
+export function CancelUpload(arg1) {
+  return window['go']['main']['App']['CancelUpload'](arg1);
+}
+
+export function CancelUploads() {
+  return window['go']['main']['App']['CancelUploads']();
+}
+
 export function CreateFolder(arg1) {
   return window['go']['main']['App']['CreateFolder'](arg1);
 }
@@ -62,6 +70,10 @@ export function PickFile(arg1) {
   return window['go']['main']['App']['PickFile'](arg1);
 }
 
+export function PickFolderForUpload(arg1) {
+  return window['go']['main']['App']['PickFolderForUpload'](arg1);
+}
+
 export function PreviewFile(arg1) {
   return window['go']['main']['App']['PreviewFile'](arg1);
 }
@@ -112,6 +124,10 @@ export function SyncStatus() {
 
 export function UploadFile(arg1) {
   return window['go']['main']['App']['UploadFile'](arg1);
+}
+
+export function UploadFolderPicked() {
+  return window['go']['main']['App']['UploadFolderPicked']();
 }
 
 export function UploadPicked(arg1) {

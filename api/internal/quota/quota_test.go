@@ -51,16 +51,14 @@ func TestTryReserve_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	success := 0
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			if r.TryReserve("u", size, 0, quota) {
 				mu.Lock()
 				success++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if success != quota/size {
@@ -68,5 +66,38 @@ func TestTryReserve_Concurrent(t *testing.T) {
 	}
 	if r.Get("u") != quota {
 		t.Fatalf("reserved=%d want %d", r.Get("u"), quota)
+	}
+}
+
+func TestTryReserve_ExactLimit(t *testing.T) {
+	r := New()
+	if !r.TryReserve("u", 100, 0, 100) {
+		t.Fatal("reserve of exactly quota must succeed")
+	}
+	if r.TryReserve("u", 1, 0, 100) {
+		t.Fatal("reserve beyond quota must fail")
+	}
+}
+
+func TestTryReserve_MultiUserIndependent(t *testing.T) {
+	r := New()
+	if !r.TryReserve("userA", 500, 0, 500) {
+		t.Fatal("userA should reach limit")
+	}
+	if r.TryReserve("userA", 1, 0, 500) {
+		t.Fatal("userA at limit must be rejected")
+	}
+	if !r.TryReserve("userB", 500, 0, 500) {
+		t.Fatal("userB should not be affected by userA's limit")
+	}
+}
+
+func TestRelease_BelowZeroClamps(t *testing.T) {
+	r := New()
+	_ = r.TryReserve("u", 50, 0, 500)
+	r.Release("u", 9999)
+	got := r.Get("u")
+	if got != 0 {
+		t.Fatalf("over-release should clamp to 0, got %d", got)
 	}
 }

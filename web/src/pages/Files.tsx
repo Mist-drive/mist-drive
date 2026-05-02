@@ -4,7 +4,10 @@ import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
 import ReplaceDialog from '../components/ReplaceDialog'
 import PreviewContent from '@shared/components/PreviewContent'
+import StorageStats from '@shared/components/StorageStats'
+import UploadCard from '@shared/components/UploadCard'
 import { fmt } from '@shared/lib/format'
+import { type UploadEntry } from '@shared/lib/upload'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 
 // webkitdirectory isn't in the default React HTMLInputAttributes type
@@ -15,36 +18,6 @@ declare module 'react' {
   }
 }
 
-
-function fmtEta(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return '—'
-  if (seconds < 1) return '<1s'
-  if (seconds < 60) return `${Math.ceil(seconds)}s`
-  if (seconds < 3600) {
-    const m = Math.floor(seconds / 60)
-    const s = Math.ceil(seconds % 60)
-    return `${m}m ${s}s`
-  }
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  return `${h}h ${m}m`
-}
-
-function etaFor(loaded: number, total: number, startedAt: number): string {
-  if (loaded <= 0 || loaded >= total) return '—'
-  const elapsed = (Date.now() - startedAt) / 1000
-  if (elapsed < 0.5) return '—'
-  const speed = loaded / elapsed
-  return fmtEta((total - loaded) / speed)
-}
-
-type UP = {
-  key: string
-  pct: number
-  loaded: number
-  total: number
-  startedAt: number
-}
 
 const FILE_CONCURRENCY = 4
 
@@ -74,7 +47,7 @@ export default function Files() {
   const [editingPath, setEditingPath] = useState<string | null>(null)
   const [editingValue, setEditingValue] = useState('')
   const [renameErr, setRenameErr] = useState<string | null>(null)
-  const [active, setActive] = useState<Record<string, UP>>({})
+  const [active, setActive] = useState<Record<string, UploadEntry>>({})
   const [queued, setQueued] = useState(0)
   const [done, setDone] = useState(0)
   const [failed, setFailed] = useState(0)
@@ -183,10 +156,7 @@ export default function Files() {
       }
     } finally {
       controllers.current.delete(key)
-      setActive(a => {
-        const { [key]: _, ...rest } = a
-        return rest
-      })
+      setActive(a => { const { [key]: _, ...rest } = a; return rest })
     }
   }
 
@@ -335,21 +305,6 @@ export default function Files() {
   }
 
   const activeList = Object.values(active)
-  let globalLoaded = 0
-  let globalTotal = 0
-  let earliestStart = Infinity
-  for (const up of activeList) {
-    globalLoaded += up.loaded
-    globalTotal += up.total
-    if (up.startedAt < earliestStart) earliestStart = up.startedAt
-  }
-  const globalEta = (() => {
-    if (activeList.length === 0 || globalLoaded <= 0) return '—'
-    const elapsed = (Date.now() - earliestStart) / 1000
-    if (elapsed < 0.5) return '—'
-    const speed = globalLoaded / elapsed
-    return fmtEta((globalTotal - globalLoaded) / speed)
-  })()
 
   const folderSet = new Set<string>()
   for (const f of files) {
@@ -430,49 +385,25 @@ export default function Files() {
     >
       <input ref={fileInput} type="file" multiple onChange={onPick} style={{ display: 'none' }} />
       <input ref={folderInput} type="file" multiple webkitdirectory="" directory="" onChange={onPick} style={{ display: 'none' }} />
-      {(activeList.length > 0 || queued > 0) && (
-        <div className="card">
-          <div className="row" style={{ justifyContent: 'space-between', marginBottom: '.8rem', gap: '.8rem' }}>
-            <h3 style={{ margin: 0 }}>Uploads</h3>
-            <div className="row" style={{ gap: '.8rem', flexShrink: 0 }}>
-              <span className="muted">
-                {activeList.length} active · {queued} queued · {done} done
-                {failed > 0 ? ` · ${failed} failed` : ''}
-                {activeList.length > 0 && ` · ETA ${globalEta}`}
-              </span>
-              {(activeList.length > 0 || queued > 0) && (
-                <button className="danger" onClick={onCancelAll}>Cancel all</button>
-              )}
-            </div>
-          </div>
-          {activeList.map(up => (
-            <div key={up.key} style={{ marginBottom: '.7rem' }}>
-              <div className="row" style={{ justifyContent: 'space-between', gap: '.8rem', minWidth: 0 }}>
-                <span
-                  title={up.key}
-                  style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {up.key}
-                </span>
-                <span className="muted" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-                  {fmt(up.loaded)} / {fmt(up.total)} · {up.pct}% · {etaFor(up.loaded, up.total, up.startedAt)}
-                </span>
-                <button
-                  className="ghost"
-                  title="Cancel this upload"
-                  onClick={() => onCancelUpload(up.key)}
-                  style={{ flexShrink: 0, padding: '.25rem .55rem', fontSize: '0.8rem' }}
-                >
-                  ✕
-                </button>
-              </div>
-              <div className="progress"><div style={{ width: `${up.pct}%` }} /></div>
-            </div>
-          ))}
+      <UploadCard
+        entries={activeList}
+        queued={queued}
+        done={done}
+        failed={failed}
+        onCancelAll={onCancelAll}
+        onCancelOne={onCancelUpload}
+      />
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '.5rem' }}>
+        <div style={{ flex: 1 }}>
+          {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+          {renameErr && <p className="error" style={{ margin: 0 }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
         </div>
-      )}
-      {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
-      {renameErr && <p className="error" style={{ marginBottom: '.8rem' }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
+        <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
+          <button type="button" className="ghost" onClick={() => setNewFolder('')}>New folder</button>
+          <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>Upload files</button>
+          <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>Upload folder</button>
+        </div>
+      </div>
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
@@ -525,19 +456,7 @@ export default function Files() {
             </th>
             <th>Size</th>
             <th>Modified</th>
-            <th>
-              <div className="row" style={{ gap: '.5rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-                <button type="button" className="ghost" onClick={() => setNewFolder('')}>
-                  New folder
-                </button>
-                <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
-                  Upload files
-                </button>
-                <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>
-                  Upload folder
-                </button>
-              </div>
-            </th>
+            <th></th>
           </tr></thead>
           <tbody>
             {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview)}
@@ -545,23 +464,14 @@ export default function Files() {
         </table>
       </div>
       {me && (
-        <div className="muted" style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>
-          {fmt(me.usedBytes)} / {fmt(me.quotaBytes)} used
-          {' '}({totalFiles} file{totalFiles === 1 ? '' : 's'},{' '}
-          {totalFolders} folder{totalFolders === 1 ? '' : 's'})
-          {' · '}
-          <a
-            href="#"
-            onClick={(e) => { e.preventDefault(); if (!refreshing) onRefresh() }}
-            style={{
-              color: 'var(--accent-blue)',
-              opacity: refreshing ? 0.5 : 1,
-              cursor: refreshing ? 'default' : 'pointer',
-            }}
-          >
-            {refreshing ? 'refreshing…' : 'refresh'}
-          </a>
-        </div>
+        <StorageStats
+          usedBytes={me.usedBytes}
+          quotaBytes={me.quotaBytes}
+          totalFiles={totalFiles}
+          totalFolders={totalFolders}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+        />
       )}
     </div>
     {replaceConflicts.length > 0 && (
