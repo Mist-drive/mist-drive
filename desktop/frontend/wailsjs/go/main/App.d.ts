@@ -22,7 +22,7 @@ export function GetVersion():Promise<string>;
 
 export function ListEnvironments():Promise<Array<string>>;
 
-export function ListFiles():Promise<Array<apiclient.ObjectInfo>>;
+export function ListFiles():Promise<apiclient.ListResponse>;
 
 export function Login(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<apiclient.PublicUser>;
 
@@ -37,6 +37,8 @@ export function PickFile(arg1:string):Promise<string>;
 export function RecomputeUsage():Promise<number>;
 
 export function RemoveSyncFolder(arg1:number):Promise<void>;
+
+export function RenameFile(arg1:string,arg2:string):Promise<void>;
 
 export function RequestQuit():Promise<void>;
 

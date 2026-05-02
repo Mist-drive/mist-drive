@@ -20,6 +20,10 @@ import (
 	"github.com/yann/mist-drive/api/internal/webui"
 )
 
+// Version is overridden at build time via -ldflags "-X main.Version=1.2.3".
+// Defaults to "dev" so ad-hoc builds skip the version check.
+var Version = "dev"
+
 func main() {
 	cfg := config.Load()
 
@@ -78,6 +82,7 @@ func main() {
 		Uploads:      uploadStore,
 		Reservations: quota.New(),
 		Events:       events.NewHub(),
+		Version:      Version,
 	}
 	srv.Register(app)
 

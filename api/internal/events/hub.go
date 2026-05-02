@@ -27,6 +27,7 @@ type Type string
 
 const (
 	FilesChanged Type = "files-changed"
+	RenameError  Type = "rename-error"
 )
 
 // CoalesceWindow is the trailing-debounce delay applied to Publish.
@@ -35,7 +36,9 @@ const (
 var CoalesceWindow = 750 * time.Millisecond
 
 type Event struct {
-	Type Type `json:"type"`
+	Type    Type   `json:"type"`
+	Message string `json:"message,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 type Hub struct {

@@ -25,6 +25,7 @@ import (
 type Client struct {
 	baseURL string
 	token   string
+	version string
 	http    *http.Client
 	// Optional outbound byte-rate limiter applied to every multipart
 	// part PUT. Shared across all concurrent parts so the total throughput
@@ -72,8 +73,9 @@ type PublicUser struct {
 }
 
 type loginReq struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
+	Login         string `json:"login"`
+	Password      string `json:"password"`
+	ClientVersion string `json:"clientVersion,omitempty"`
 }
 type loginResp struct {
 	Token string     `json:"token"`
@@ -83,13 +85,14 @@ type loginResp struct {
 // New builds a client against the given base URL. `insecureTLS` lets
 // the user opt in to self-signed certs — required during local dev
 // because the HTTPS enforcement of the original plan was relaxed.
-func New(baseURL, token string, insecureTLS bool) *Client {
+func New(baseURL, token, version string, insecureTLS bool) *Client {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
 	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
+		version: version,
 		http:    &http.Client{Timeout: 30 * time.Second, Transport: tr},
 	}
 }
@@ -134,7 +137,8 @@ func (c *Client) do(method, path string, body any, out any) error {
 // should be persisted by the caller.
 func (c *Client) Login(login, password string) (string, PublicUser, error) {
 	var r loginResp
-	if err := c.do("POST", "/auth/login", loginReq{login, password}, &r); err != nil {
+	body := loginReq{Login: login, Password: password, ClientVersion: c.version}
+	if err := c.do("POST", "/auth/login", body, &r); err != nil {
 		return "", PublicUser{}, err
 	}
 	c.token = r.Token
@@ -163,12 +167,21 @@ type ObjectInfo struct {
 	LastModified string `json:"lastModified"`
 }
 
-func (c *Client) ListFiles() ([]ObjectInfo, error) {
-	var out []ObjectInfo
+type ListResponse struct {
+	Objects    []ObjectInfo `json:"objects"`
+	Processing []string     `json:"processing"`
+}
+
+func (c *Client) ListFiles() (ListResponse, error) {
+	var out ListResponse
 	if err := c.do("GET", "/api/files?prefix=", nil, &out); err != nil {
-		return nil, err
+		return ListResponse{}, err
 	}
 	return out, nil
+}
+
+func (c *Client) Rename(path, newName string) error {
+	return c.do("POST", "/api/files/rename", map[string]string{"path": path, "newName": newName}, nil)
 }
 
 func (c *Client) DeleteFile(key string) error {

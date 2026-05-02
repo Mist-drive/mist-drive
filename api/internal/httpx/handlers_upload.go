@@ -36,6 +36,9 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 	if r.Key == "" || strings.Contains(r.Key, "..") {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid key")
 	}
+	if s.isProcessingBlocked(u.ID, r.Key) {
+		return fiber.NewError(fiber.StatusConflict, "destination is currently being processed")
+	}
 	if !s.Reservations.TryReserve(u.ID, r.Size, u.UsedBytes, u.QuotaBytes) {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "quota exceeded")
 	}

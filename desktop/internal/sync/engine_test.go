@@ -22,12 +22,12 @@ type fakeAPI struct {
 	rate      int
 }
 
-func (f *fakeAPI) ListFiles() ([]apiclient.ObjectInfo, error) {
+func (f *fakeAPI) ListFiles() (apiclient.ListResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]apiclient.ObjectInfo, len(f.remote))
 	copy(out, f.remote)
-	return out, nil
+	return apiclient.ListResponse{Objects: out, Processing: nil}, nil
 }
 func (f *fakeAPI) UploadFile(local, key string, _ int) error {
 	f.mu.Lock()

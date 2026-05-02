@@ -36,7 +36,7 @@ type App struct {
 	pickedLocalPath string
 }
 
-func NewApp() *App {
+func NewApp(ver string) *App {
 	st, err := settings.Open()
 	if err != nil {
 		// Settings dir unwritable is fatal — there's no meaningful
@@ -44,9 +44,10 @@ func NewApp() *App {
 		panic(fmt.Errorf("open settings: %w", err))
 	}
 	s := st.Get()
-	api := apiclient.New(s.APIURL, s.JWT, true)
+	api := apiclient.New(s.APIURL, s.JWT, ver, true)
 	api.SetUploadRateKBps(s.MaxUploadRateKBps)
 	a := &App{
+		version: ver,
 		settings: st,
 		// InsecureTLS=true: plan originally required HTTPS, but to
 		// develop against http://localhost:3000 we accept both.
@@ -58,10 +59,15 @@ func NewApp() *App {
 	// The ws client's only job is to translate server pushes into two
 	// side effects: kick the sync engine for an immediate reconcile,
 	// and emit a Wails runtime event so the Files screen re-fetches.
-	a.ws = wsclient.New(func() {
+	a.ws = wsclient.New(func(eventType, message, path string) {
 		a.engine.Nudge()
 		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "files-changed")
+			switch eventType {
+			case "rename-error":
+				runtime.EventsEmit(a.ctx, "rename-error", message, path)
+			default:
+				runtime.EventsEmit(a.ctx, "files-changed")
+			}
 		}
 	}, func(msg string) { fmt.Println("[ws]", msg) })
 	return a
@@ -101,7 +107,7 @@ func (a *App) SaveSettings(s settings.Settings) error {
 	if err := a.settings.Save(s); err != nil {
 		return err
 	}
-	a.api = apiclient.New(s.APIURL, s.JWT, true)
+	a.api = apiclient.New(s.APIURL, s.JWT, a.version, true)
 	return nil
 }
 
@@ -114,7 +120,7 @@ func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclie
 	// Build a fresh client against the URL the user just typed —
 	// that way a login attempt with a new host doesn't require a
 	// separate "save settings" step first.
-	cli := apiclient.New(apiURL, "", true)
+	cli := apiclient.New(apiURL, "", a.version, true)
 	token, user, err := cli.Login(login, password)
 	if err != nil {
 		return apiclient.PublicUser{}, err
@@ -127,7 +133,7 @@ func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclie
 	if err := a.settings.Save(s); err != nil {
 		return apiclient.PublicUser{}, err
 	}
-	a.api = apiclient.New(apiURL, token, true)
+	a.api = apiclient.New(apiURL, token, a.version, true)
 	a.api.SetUploadRateKBps(s.MaxUploadRateKBps)
 	a.ws.Start(apiURL, token)
 	// Bounce the engine so it picks up the fresh API client and token.
@@ -194,7 +200,7 @@ func (a *App) Logout() error {
 	if err := a.settings.Save(s); err != nil {
 		return err
 	}
-	a.api = apiclient.New(s.APIURL, "", true)
+	a.api = apiclient.New(s.APIURL, "", a.version, true)
 	a.ws.Stop()
 	a.engine.Stop()
 	return nil
@@ -215,8 +221,13 @@ func (a *App) Me() (apiclient.PublicUser, error) {
 
 // ListFiles returns every object in the current user's bucket. The
 // desktop file browser renders a tree from this, same as the web UI.
-func (a *App) ListFiles() ([]apiclient.ObjectInfo, error) {
+func (a *App) ListFiles() (apiclient.ListResponse, error) {
 	return a.api.ListFiles()
+}
+
+// RenameFile renames a file or folder at the given path to the new name.
+func (a *App) RenameFile(path, newName string) error {
+	return a.api.Rename(path, newName)
 }
 
 // CreateFolder creates an empty folder by writing a zero-byte .keep marker.

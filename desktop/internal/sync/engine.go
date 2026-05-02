@@ -41,7 +41,7 @@ import (
 // uses. Declaring it here lets tests inject a fake without dragging in
 // an HTTP client.
 type API interface {
-	ListFiles() ([]apiclient.ObjectInfo, error)
+	ListFiles() (apiclient.ListResponse, error)
 	UploadFile(localPath, remoteKey string, maxConcurrentParts int) error
 	DownloadFile(key, destPath string) error
 	DeleteFile(key string) error
@@ -310,11 +310,12 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 	e.status.LastError = ""
 	e.mu.Unlock()
 
-	remoteAll, err := e.api.ListFiles()
+	listResp, err := e.api.ListFiles()
 	if err != nil {
 		e.setErr(fmt.Errorf("list remote: %w", err))
 		return
 	}
+	remoteAll := listResp.Objects
 
 	for _, f := range s.Folders {
 		if ctx.Err() != nil {

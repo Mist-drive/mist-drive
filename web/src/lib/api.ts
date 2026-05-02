@@ -69,7 +69,14 @@ export function onLoading(l: (n: number) => void): () => void {
 // Backoff is capped at 10s so a flaky network doesn't pin the tab at
 // 100% reconnecting CPU. A hidden tab pauses reconnects until it's
 // visible again to avoid wasting a socket on backgrounded tabs.
-export type EventMsg = { type: 'files-changed' }
+export type EventMsg =
+  | { type: 'files-changed' }
+  | { type: 'rename-error'; message: string; path: string }
+
+export type ListResponse = {
+  objects: ObjectInfo[]
+  processing: string[]
+}
 
 const _eventListeners = new Set<(e: EventMsg) => void>()
 export function onEvent(l: (e: EventMsg) => void): () => void {
@@ -135,7 +142,7 @@ export const api = {
     }),
   me: () => req<PublicUser>('/api/me'),
   listFiles: (prefix = '') =>
-    req<ObjectInfo[]>(`/api/files?prefix=${encodeURIComponent(prefix)}`),
+    req<ListResponse>(`/api/files?prefix=${encodeURIComponent(prefix)}`),
   deleteFile: (key: string) =>
     req<{ ok: boolean }>(`/api/files?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
   deleteFolder: (prefix: string) =>
@@ -162,6 +169,11 @@ export const api = {
     req<{ ok: boolean; size: number }>('/api/files/upload/complete', {
       method: 'POST',
       body: JSON.stringify({ uploadId, parts }),
+    }),
+  rename: (path: string, newName: string) =>
+    req<{ ok: boolean }>('/api/files/rename', {
+      method: 'POST',
+      body: JSON.stringify({ path, newName }),
     }),
   mkdir: (path: string) =>
     req<{ ok: boolean }>('/api/files/mkdir', {

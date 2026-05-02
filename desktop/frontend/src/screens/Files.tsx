@@ -6,9 +6,11 @@ import {
   DeleteFolder,
   DownloadFile,
   DownloadFolder,
+  GetSettings,
   ListFiles,
   PickFile,
   RecomputeUsage,
+  RenameFile,
   UploadPicked,
 } from '../../wailsjs/go/main/App'
 import ReplaceDialog from '../components/ReplaceDialog'
@@ -82,24 +84,39 @@ type Props = { onQuotaChange?: () => void }
 // JWT never leaves the Go side.
 export default function Files({ onQuotaChange }: Props) {
   const [files, setFiles] = useState<apiclient.ObjectInfo[]>([])
+  const [processing, setProcessing] = useState<string[]>([])
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [err, setErr] = useState<string | null>(null)
+  const [renameErr, setRenameErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null) // status line during uploads/downloads
+  const [editingPath, setEditingPath] = useState<string | null>(null)
+  const [editingValue, setEditingValue] = useState('')
   const [query, setQuery] = useState('')
   const [newFolder, setNewFolder] = useState<string | null>(null)
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
+  const [syncRoots, setSyncRoots] = useState<Set<string>>(new Set())
   const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
   const confirm = useConfirm()
 
   const refresh = async () => {
-    try { setFiles((await ListFiles()) || []) }
+    try {
+      const resp = await ListFiles()
+      setFiles(resp.objects || [])
+      setProcessing(resp.processing || [])
+    }
     catch (e: any) { setErr(String(e?.message ?? e)) }
   }
   useEffect(() => {
     refresh()
-    // Server pushes "files-changed" whenever any client mutates the
-    // bucket; the envelope carries no delta so we just re-fetch.
-    return EventsOn('files-changed', () => { refresh(); onQuotaChange?.() })
+    GetSettings().then(s => {
+      setSyncRoots(new Set(s.folders.map(f => f.remotePrefix.replace(/\/$/, ''))))
+    }).catch(() => {})
+    const unsubChange = EventsOn('files-changed', () => { refresh(); onQuotaChange?.() })
+    const unsubErr = EventsOn('rename-error', (message: string, path: string) => {
+      setRenameErr(`Rename failed for "${path}": ${message}`)
+      refresh()
+    })
+    return () => { unsubChange(); unsubErr() }
   }, [])
 
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))
@@ -163,6 +180,26 @@ export default function Files({ onQuotaChange }: Props) {
     onQuotaChange?.()
   }
 
+  const isProcessing = (path: string) =>
+    processing.some(p => path === p || path.startsWith(p + '/'))
+
+  const isSyncRoot = (path: string) => syncRoots.has(path)
+
+  const onCommitRename = async (oldPath: string) => {
+    const newName = editingValue.trim()
+    setEditingPath(null)
+    setEditingValue('')
+    if (!newName) return
+    const oldName = oldPath.split('/').pop() ?? oldPath
+    if (newName === oldName) return
+    try {
+      await RenameFile(oldPath, newName)
+      await refresh()
+    } catch (e: any) {
+      setErr(String(e?.message ?? e))
+    }
+  }
+
   // Client-side search: case-insensitive substring match on the full
   // key. The whole listing is already in memory so there's no reason
   // to round-trip the API — mirrors the web UI's behavior.
@@ -197,6 +234,7 @@ export default function Files({ onQuotaChange }: Props) {
         </div>
       </div>
       {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
+      {renameErr && <p className="error" style={{ marginBottom: '.8rem' }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
@@ -252,7 +290,7 @@ export default function Files({ onQuotaChange }: Props) {
           </tr>
         </thead>
         <tbody>
-          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder)}
+          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot)}
         </tbody>
       </table>
       <div style={{
@@ -288,51 +326,119 @@ function renderTree(
   onDelete: (k: string) => void,
   onDeleteFolder: (p: string) => void,
   onDownloadFolder: (p: string) => void,
+  isProcessing: (path: string) => boolean,
+  editingPath: string | null,
+  editingValue: string,
+  setEditingPath: (p: string | null) => void,
+  setEditingValue: (v: string) => void,
+  onCommitRename: (oldPath: string) => void,
+  isSyncRoot: (path: string) => boolean,
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
     const indent = { paddingLeft: `${depth * 1.2 + 0.4}rem` }
     const iconBtn = { padding: '.3rem .55rem', fontSize: '0.95rem', lineHeight: 1 }
-    const actions = (
-      <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-        <button className="ghost" title={c.isDir ? 'Download as zip' : 'Download'} style={iconBtn}
-          onClick={(e) => { e.stopPropagation(); c.isDir ? onDownloadFolder(c.path) : onDownload(c.path) }}>⬇</button>
-        <button className="danger" title="Delete" style={iconBtn}
-          onClick={(e) => { e.stopPropagation(); c.isDir ? onDeleteFolder(c.path) : onDelete(c.path) }}>✕</button>
-      </div>
-    )
+    const proc = isProcessing(c.path)
+    const editing = editingPath === c.path
+
     if (c.isDir) {
       const open = !!expanded[c.path]
+
+      const nameCell = editing ? (
+        <input
+          autoFocus
+          type="text"
+          value={editingValue}
+          onChange={(e) => setEditingValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCommitRename(c.path)
+            if (e.key === 'Escape') { setEditingPath(null); setEditingValue('') }
+          }}
+          onBlur={() => onCommitRename(c.path)}
+          style={{ fontSize: 'inherit', padding: '.1rem .3rem', width: '12rem' }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <strong>{c.name}</strong>
+      )
+
+      const syncRoot = isSyncRoot(c.path)
+      const disabledStyle = { opacity: 0.35, cursor: 'not-allowed' as const, pointerEvents: 'none' as const }
+      const actionsTd = proc ? (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+          <button className="ghost" title={syncRoot ? 'Sync root — cannot rename' : 'Rename'} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
+            onClick={(e) => { e.stopPropagation(); if (!syncRoot) { setEditingPath(c.path); setEditingValue(c.name) } }}>✏️</button>
+          <button className="ghost" title="Download as zip" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>⬇</button>
+          <button className="danger" title={syncRoot ? 'Sync root — cannot delete' : 'Delete'} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
+            onClick={(e) => { e.stopPropagation(); if (!syncRoot) onDeleteFolder(c.path) }}>✕</button>
+        </div>
+      )
+
       rows.push(
         <tr key={`d:${c.path}`}>
-          <td style={{ ...indent, cursor: 'pointer' }} onClick={() => toggle(c.path)}>
+          <td style={{ ...indent, cursor: editing ? 'default' : 'pointer' }} onClick={() => !editing && toggle(c.path)}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}>
               {open ? '▾' : '▸'}
             </span>
-            <span style={{ display: 'inline-block', width: '1.4rem' }}>{open ? '📂' : '📁'}</span>
-            <strong>{c.name}</strong>
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : (open ? '📂' : '📁')}</span>
+            {nameCell}
           </td>
           <td className="muted">{fmt(c.size)}</td>
           <td className="muted">—</td>
-          <td>{actions}</td>
+          <td>{actionsTd}</td>
         </tr>,
       )
       if (open) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot))
       }
     } else {
+      const nameCell = editing ? (
+        <input
+          autoFocus
+          type="text"
+          value={editingValue}
+          onChange={(e) => setEditingValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCommitRename(c.path)
+            if (e.key === 'Escape') { setEditingPath(null); setEditingValue('') }
+          }}
+          onBlur={() => onCommitRename(c.path)}
+          style={{ fontSize: 'inherit', padding: '.1rem .3rem', width: '12rem' }}
+        />
+      ) : c.name
+
+      const actionsTd = proc ? (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+          <button className="ghost" title="Rename" style={iconBtn}
+            onClick={() => { setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
+          <button className="ghost" title="Download" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
+          <button className="danger" title="Delete" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
+        </div>
+      )
+
       rows.push(
         <tr key={`f:${c.path}`}>
           <td style={indent}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}></span>
-            <span style={{ display: 'inline-block', width: '1.4rem' }}>📄</span>
-            {c.name}
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : '📄'}</span>
+            {nameCell}
           </td>
           <td>{fmt(c.size)}</td>
           <td className="muted">
             {c.lastModified ? new Date(c.lastModified).toLocaleString() : ''}
           </td>
-          <td>{actions}</td>
+          <td>{actionsTd}</td>
         </tr>,
       )
     }

@@ -165,6 +165,13 @@ func (c *Client) StatObject(ctx context.Context, bucket, key string) (int64, err
 	return info.Size, nil
 }
 
+func (c *Client) CopyObject(ctx context.Context, bucket, srcKey, dstKey string) error {
+	dst := minio.CopyDestOptions{Bucket: bucket, Object: dstKey}
+	src := minio.CopySrcOptions{Bucket: bucket, Object: srcKey}
+	_, err := c.mc.CopyObject(ctx, dst, src)
+	return err
+}
+
 // --- Multipart ---
 
 type PartURL struct {

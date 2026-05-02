@@ -8,8 +8,9 @@ import (
 )
 
 type loginReq struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
+	Login         string `json:"login"`
+	Password      string `json:"password"`
+	ClientVersion string `json:"clientVersion,omitempty"`
 }
 type loginResp struct {
 	Token string           `json:"token"`
@@ -20,6 +21,9 @@ func (s *Server) login(c *fiber.Ctx) error {
 	var r loginReq
 	if err := c.BodyParser(&r); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
+	}
+	if s.Version != "dev" && r.ClientVersion != "" && r.ClientVersion != "dev" && r.ClientVersion != s.Version {
+		return fiber.NewError(fiber.StatusBadRequest, "client outdated: please download version "+s.Version)
 	}
 	u, err := s.Users.GetByLogin(r.Login)
 	if err != nil || !auth.VerifyPassword(u.BcryptPwd, r.Password) {

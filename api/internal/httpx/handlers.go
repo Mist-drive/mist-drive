@@ -12,6 +12,9 @@
 package httpx
 
 import (
+	"strings"
+	"sync"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 	"github.com/yann/mist-drive/api/internal/config"
@@ -29,6 +32,9 @@ type Server struct {
 	Uploads      *uploads.Store
 	Reservations *quota.Reservations
 	Events       *events.Hub
+	Version      string
+	procMu       sync.RWMutex
+	processing   map[string]map[string]bool // userID → processing path prefixes
 }
 
 func (s *Server) Register(app *fiber.App) {
@@ -47,6 +53,7 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/upload/complete", s.uploadComplete)
 	files.Post("/upload/abort", s.uploadAbort)
 	files.Post("/mkdir", s.mkdir)
+	files.Post("/rename", s.renameFile)
 	files.Post("/recompute-usage", s.recomputeUsage)
 
 	// WebSocket for push notifications. The JWT middleware already ran
@@ -82,4 +89,49 @@ func (s *Server) publishChange(uid string) {
 	if s.Events != nil {
 		s.Events.Publish(uid, events.Event{Type: events.FilesChanged})
 	}
+}
+
+func (s *Server) addProcessing(userID, prefix string) {
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	if s.processing == nil {
+		s.processing = make(map[string]map[string]bool)
+	}
+	if s.processing[userID] == nil {
+		s.processing[userID] = make(map[string]bool)
+	}
+	s.processing[userID][prefix] = true
+}
+
+func (s *Server) removeProcessing(userID, prefix string) {
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	if s.processing == nil {
+		return
+	}
+	delete(s.processing[userID], prefix)
+	if len(s.processing[userID]) == 0 {
+		delete(s.processing, userID)
+	}
+}
+
+func (s *Server) isProcessingBlocked(userID, key string) bool {
+	s.procMu.RLock()
+	defer s.procMu.RUnlock()
+	for prefix := range s.processing[userID] {
+		if key == prefix || strings.HasPrefix(key, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) listProcessing(userID string) []string {
+	s.procMu.RLock()
+	defer s.procMu.RUnlock()
+	out := make([]string, 0, len(s.processing[userID]))
+	for p := range s.processing[userID] {
+		out = append(out, p)
+	}
+	return out
 }

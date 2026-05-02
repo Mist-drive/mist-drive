@@ -70,6 +70,10 @@ export function RemoveSyncFolder(arg1) {
   return window['go']['main']['App']['RemoveSyncFolder'](arg1);
 }
 
+export function RenameFile(arg1, arg2) {
+  return window['go']['main']['App']['RenameFile'](arg1, arg2);
+}
+
 export function RequestQuit() {
   return window['go']['main']['App']['RequestQuit']();
 }

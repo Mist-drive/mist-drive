@@ -121,9 +121,13 @@ type DragHandlers = {
 
 export default function Files() {
   const [files, setFiles] = useState<ObjectInfo[]>([])
+  const [processing, setProcessing] = useState<string[]>([])
   const [me, setMe] = useState<PublicUser | null>(getUser())
   const [recomputing, setRecomputing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [editingPath, setEditingPath] = useState<string | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+  const [renameErr, setRenameErr] = useState<string | null>(null)
   const [active, setActive] = useState<Record<string, UP>>({})
   const [queued, setQueued] = useState(0)
   const [done, setDone] = useState(0)
@@ -169,8 +173,9 @@ export default function Files() {
 
   const refresh = async () => {
     try {
-      const [list, u] = await Promise.all([api.listFiles(), api.me()])
-      setFiles(list)
+      const [listResp, u] = await Promise.all([api.listFiles(), api.me()])
+      setFiles(listResp.objects)
+      setProcessing(listResp.processing)
       setMe(u)
       const tok = getToken()
       if (tok) setSession(tok, u)
@@ -179,7 +184,14 @@ export default function Files() {
   useEffect(() => { refresh() }, [])
 
   useEffect(() => {
-    return onEvent(() => { refresh() })
+    return onEvent((e) => {
+      if (e.type === 'rename-error') {
+        setRenameErr(`Rename failed for "${e.path}": ${e.message}`)
+        refresh()
+      } else {
+        refresh()
+      }
+    })
   }, [])
 
   const onRecompute = async () => {
@@ -420,6 +432,24 @@ export default function Files() {
 
   const dragHandlers: DragHandlers = { dragOverFolder, onDragEnterFolder, onFolderDrop: handleDrop }
 
+  const isProcessing = (path: string) =>
+    processing.some(p => path === p || path.startsWith(p + '/'))
+
+  const onCommitRename = async (oldPath: string) => {
+    const newName = editingValue.trim()
+    setEditingPath(null)
+    setEditingValue('')
+    if (!newName) return
+    const oldName = oldPath.split('/').pop() ?? oldPath
+    if (newName === oldName) return
+    try {
+      await api.rename(oldPath, newName)
+      await refresh()
+    } catch (e: any) {
+      setErr(e.message)
+    }
+  }
+
   return (
     <>
     <div
@@ -472,6 +502,7 @@ export default function Files() {
         </div>
       )}
       {err && <p className="error" style={{ marginBottom: '.8rem' }}>{err}</p>}
+      {renameErr && <p className="error" style={{ marginBottom: '.8rem' }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
@@ -539,7 +570,7 @@ export default function Files() {
             </th>
           </tr></thead>
           <tbody>
-            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers)}
+            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename)}
           </tbody>
         </table>
       </div>
@@ -584,44 +615,70 @@ function renderTree(
   onDeleteFolder: (p: string) => void,
   onDownloadFolder: (p: string) => void,
   dnd: DragHandlers,
+  isProcessing: (path: string) => boolean,
+  editingPath: string | null,
+  editingValue: string,
+  setEditingPath: (p: string | null) => void,
+  setEditingValue: (v: string) => void,
+  onCommitRename: (oldPath: string) => void,
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
     const indent = { paddingLeft: `${depth * 1.2 + 0.4}rem` }
     const iconBtn = { padding: '.3rem .55rem', fontSize: '0.95rem', lineHeight: 1 }
-    const actionsTd = (
-      <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-        <button
-          className="ghost"
-          title="Download"
-          style={iconBtn}
-          onClick={(e) => { e.stopPropagation(); c.isDir ? onDownloadFolder(c.path) : onDownload(c.path) }}
-        >⬇</button>
-        <button
-          className="danger"
-          title="Delete"
-          style={iconBtn}
-          onClick={(e) => { e.stopPropagation(); c.isDir ? onDeleteFolder(c.path) : onDelete(c.path) }}
-        >✕</button>
-      </div>
-    )
+    const proc = isProcessing(c.path)
+    const editing = editingPath === c.path
+
     if (c.isDir) {
       const isOpen = !!expanded[c.path]
-      const isHovered = dnd.dragOverFolder === c.path
+
+      const nameCell = editing ? (
+        <input
+          autoFocus
+          type="text"
+          value={editingValue}
+          onChange={(e) => setEditingValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCommitRename(c.path)
+            if (e.key === 'Escape') { setEditingPath(null); setEditingValue('') }
+          }}
+          onBlur={() => onCommitRename(c.path)}
+          style={{ fontSize: 'inherit', padding: '.1rem .3rem', width: '12rem' }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <strong>{c.name}</strong>
+      )
+
+      const actionsTd = proc ? (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+          <button className="ghost" title="Rename" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
+          <button className="ghost" title="Download as zip" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>⬇</button>
+          <button className="danger" title="Delete" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDeleteFolder(c.path) }}>✕</button>
+        </div>
+      )
+
       rows.push(
         <tr
           key={`d:${c.path}`}
           onDragEnter={(e) => { e.stopPropagation(); dnd.onDragEnterFolder(c.path) }}
           onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
           onDrop={(e) => { e.stopPropagation(); dnd.onFolderDrop(e, c.path) }}
-          style={isHovered ? { backgroundColor: 'rgba(59, 130, 246, 0.15)' } : undefined}
+          style={dnd.dragOverFolder === c.path ? { backgroundColor: 'rgba(59, 130, 246, 0.15)' } : undefined}
         >
-          <td style={{ ...indent, cursor: 'pointer' }} onClick={() => toggle(c.path)}>
+          <td style={{ ...indent, cursor: editing ? 'default' : 'pointer' }} onClick={() => !editing && toggle(c.path)}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}>
               {isOpen ? '▾' : '▸'}
             </span>
-            <span style={{ display: 'inline-block', width: '1.4rem' }}>{isOpen ? '📂' : '📁'}</span>
-            <strong>{c.name}</strong>
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : (isOpen ? '📂' : '📁')}</span>
+            {nameCell}
           </td>
           <td className="muted">{fmt(c.size)}</td>
           <td className="muted">—</td>
@@ -629,15 +686,45 @@ function renderTree(
         </tr>,
       )
       if (isOpen) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename))
       }
     } else {
+      const nameCell = editing ? (
+        <input
+          autoFocus
+          type="text"
+          value={editingValue}
+          onChange={(e) => setEditingValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCommitRename(c.path)
+            if (e.key === 'Escape') { setEditingPath(null); setEditingValue('') }
+          }}
+          onBlur={() => onCommitRename(c.path)}
+          style={{ fontSize: 'inherit', padding: '.1rem .3rem', width: '12rem' }}
+        />
+      ) : c.name
+
+      const actionsTd = proc ? (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+          <button className="ghost" title="Rename" style={iconBtn}
+            onClick={() => { setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
+          <button className="ghost" title="Download" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
+          <button className="danger" title="Delete" style={iconBtn}
+            onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
+        </div>
+      )
+
       rows.push(
         <tr key={`f:${c.path}`}>
           <td style={indent}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}></span>
-            <span style={{ display: 'inline-block', width: '1.4rem' }}>📄</span>
-            {c.name}
+            <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : '📄'}</span>
+            {nameCell}
           </td>
           <td>{fmt(c.size)}</td>
           <td className="muted">

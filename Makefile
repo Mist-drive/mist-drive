@@ -1,3 +1,5 @@
+VERSION ?= dev
+
 .PHONY: help install build dev run clean test test-unit test-integration desktop-dev desktop-build
 
 help:
@@ -11,9 +13,9 @@ install: ## install deps for api + web + desktop
 	cd desktop && go mod download && cd frontend && bun install
 
 build: ## build api + web + desktop
-	cd api && CGO_ENABLED=0 go build -o bin/api ./cmd/server
+	cd api && CGO_ENABLED=0 go build -ldflags "-X main.Version=$(VERSION)" -o bin/api ./cmd/server
 	cd web && bun run build
-	cd desktop && wails build -tags webkit2_41
+	cd desktop && wails build -tags webkit2_41 -ldflags "-X main.version=$(VERSION)"
 
 dev: ## run api (air) + web (vite) locally, side by side
 	@echo "starting api (air) and web (vite)..."
@@ -25,7 +27,7 @@ desktop-dev: ## run the wails desktop app in dev mode (webkit2_41 tag is require
 	cd desktop && wails dev -tags webkit2_41
 
 desktop-build: ## build the wails desktop binary
-	cd desktop && wails build -tags webkit2_41
+	cd desktop && wails build -tags webkit2_41 -ldflags "-X main.version=$(VERSION)"
 
 run: ## docker compose up — mist-drive + minio, no TLS, no reverse proxy
 	mkdir -p deploy/data/api deploy/data/minio deploy/data/logs

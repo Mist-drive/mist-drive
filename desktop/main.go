@@ -46,8 +46,7 @@ func trayIcon() []byte {
 }
 
 func main() {
-	app := NewApp()
-	app.version = version
+	app := NewApp(version)
 
 	// Register the app with the OS launcher every time we start (but
 	// skip `wails dev` — its binary name contains "-dev-" and gets

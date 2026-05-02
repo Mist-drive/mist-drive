@@ -10,6 +10,7 @@ package wsclient
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,11 +23,11 @@ import (
 type Client struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
-	on     func()
+	on     func(eventType, message, path string)
 	log    func(string)
 }
 
-func New(onEvent func(), log func(string)) *Client {
+func New(onEvent func(eventType, message, path string), log func(string)) *Client {
 	if log == nil {
 		log = func(string) {}
 	}
@@ -98,11 +99,18 @@ func (c *Client) read(ctx context.Context, conn *websocket.Conn) {
 		if err != nil {
 			return
 		}
-		// Envelope is just {"type":"files-changed"}; we don't bother
-		// unmarshalling — any message means "re-fetch".
-		_ = data
-		if c.on != nil {
-			c.on()
+		if c.on == nil {
+			continue
+		}
+		var envelope struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Path    string `json:"path"`
+		}
+		if jsonErr := json.Unmarshal(data, &envelope); jsonErr == nil {
+			c.on(envelope.Type, envelope.Message, envelope.Path)
+		} else {
+			c.on("files-changed", "", "")
 		}
 	}
 }
