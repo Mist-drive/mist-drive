@@ -1,3 +1,6 @@
+export type { PreviewResult } from '@shared/components/PreviewContent'
+import type { PreviewResult } from '@shared/components/PreviewContent'
+
 export type PublicUser = {
   id: string
   login: string
@@ -190,6 +193,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ uploadId }),
     }),
+  previewFile: async (key: string): Promise<PreviewResult> => {
+    const tok = getToken()
+    const res = await fetch(`/api/files/preview?key=${encodeURIComponent(key)}`, {
+      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+    })
+    if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+    const ptype = res.headers.get('X-Preview-Type') ?? 'binary'
+    if (ptype === 'image') {
+      const blob = await res.blob()
+      return { type: 'image', content: URL.createObjectURL(blob) }
+    }
+    if (ptype === 'text') {
+      return { type: 'text', content: await res.text() }
+    }
+    return { type: 'binary' }
+  },
   admin: {
     listUsers: () => req<PublicUser[]>('/api/admin/users'),
     createUser: (login: string, password: string, quotaBytes?: number) =>

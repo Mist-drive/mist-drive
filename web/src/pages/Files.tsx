@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent } from '../lib/api'
+import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent, PreviewResult } from '../lib/api'
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
 import ReplaceDialog from '../components/ReplaceDialog'
+import PreviewContent from '@shared/components/PreviewContent'
 import { fmt } from '@shared/lib/format'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
 
@@ -83,6 +84,9 @@ export default function Files() {
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
   const confirm = useConfirm()
   const controllers = useRef<Map<string, AbortController>>(new Map())
@@ -380,6 +384,27 @@ export default function Files() {
   const isProcessing = (path: string) =>
     processing.some(p => path === p || path.startsWith(p + '/'))
 
+  const closePreview = () => {
+    if (previewResult?.type === 'image' && previewResult.content?.startsWith('blob:')) {
+      URL.revokeObjectURL(previewResult.content)
+    }
+    setPreviewKey(null)
+    setPreviewResult(null)
+  }
+
+  const onPreview = async (key: string) => {
+    closePreview()
+    setPreviewKey(key)
+    setPreviewLoading(true)
+    try {
+      setPreviewResult(await api.previewFile(key))
+    } catch {
+      setPreviewResult({ type: 'binary' })
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
   const onCommitRename = async (oldPath: string) => {
     const newName = editingValue.trim()
     setEditingPath(null)
@@ -515,7 +540,7 @@ export default function Files() {
             </th>
           </tr></thead>
           <tbody>
-            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename)}
+            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview)}
           </tbody>
         </table>
       </div>
@@ -546,6 +571,16 @@ export default function Files() {
         onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
       />
     )}
+    {previewKey && (
+      <div className="preview-panel">
+        <PreviewContent
+          filename={previewKey.split('/').pop() ?? previewKey}
+          result={previewResult}
+          loading={previewLoading}
+          onClose={closePreview}
+        />
+      </div>
+    )}
     </>
   )
 }
@@ -566,6 +601,7 @@ function renderTree(
   setEditingPath: (p: string | null) => void,
   setEditingValue: (v: string) => void,
   onCommitRename: (oldPath: string) => void,
+  onPreview: (k: string) => void,
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
@@ -631,7 +667,7 @@ function renderTree(
         </tr>,
       )
       if (isOpen) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview))
       }
     } else {
       const nameCell = editing ? (
@@ -656,7 +692,7 @@ function renderTree(
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
           <button className="ghost" title="Rename" style={iconBtn}
-            onClick={() => { setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
+            onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
           <button className="ghost" title="Download" style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
           <button className="danger" title="Delete" style={iconBtn}
@@ -665,7 +701,7 @@ function renderTree(
       )
 
       rows.push(
-        <tr key={`f:${c.path}`}>
+        <tr key={`f:${c.path}`} style={{ cursor: editing ? 'default' : 'pointer' }} onClick={() => !editing && onPreview(c.path)}>
           <td style={indent}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}></span>
             <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : '📄'}</span>

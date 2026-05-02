@@ -11,11 +11,13 @@ import {
   GetSettings,
   ListFiles,
   PickFile,
+  PreviewFile,
   RecomputeUsage,
   RenameFile,
   UploadPicked,
 } from '../../wailsjs/go/main/App'
 import ReplaceDialog from '../components/ReplaceDialog'
+import PreviewContent, { type PreviewResult } from '@shared/components/PreviewContent'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 
@@ -38,6 +40,9 @@ export default function Files({ onQuotaChange }: Props) {
   const [newFolder, setNewFolder] = useState<string | null>(null)
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
   const [syncRoots, setSyncRoots] = useState<Set<string>>(new Set())
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
   const confirm = useConfirm()
 
@@ -127,6 +132,20 @@ export default function Files({ onQuotaChange }: Props) {
     processing.some(p => path === p || path.startsWith(p + '/'))
 
   const isSyncRoot = (path: string) => syncRoots.has(path)
+
+  const onPreview = async (key: string) => {
+    setPreviewKey(key)
+    setPreviewResult(null)
+    setPreviewLoading(true)
+    try {
+      const r = await PreviewFile(key)
+      setPreviewResult(r as PreviewResult)
+    } catch {
+      setPreviewResult({ type: 'binary' })
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
 
   const onCommitRename = async (oldPath: string) => {
     const newName = editingValue.trim()
@@ -233,7 +252,7 @@ export default function Files({ onQuotaChange }: Props) {
           </tr>
         </thead>
         <tbody>
-          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot)}
+          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview)}
         </tbody>
       </table>
       <div style={{
@@ -256,6 +275,21 @@ export default function Files({ onQuotaChange }: Props) {
         onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
       />
     )}
+    {previewKey && (
+      <div
+        className="modal-backdrop"
+        onClick={(e) => { if (e.target === e.currentTarget) { setPreviewKey(null); setPreviewResult(null) } }}
+      >
+        <div className="modal" style={{ width: '560px', maxWidth: '92vw', maxHeight: '80vh', padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <PreviewContent
+            filename={previewKey.split('/').pop() ?? previewKey}
+            result={previewResult}
+            loading={previewLoading}
+            onClose={() => { setPreviewKey(null); setPreviewResult(null) }}
+          />
+        </div>
+      </div>
+    )}
     </>
   )
 }
@@ -276,6 +310,7 @@ function renderTree(
   setEditingValue: (v: string) => void,
   onCommitRename: (oldPath: string) => void,
   isSyncRoot: (path: string) => boolean,
+  onPreview: (k: string) => void,
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
@@ -337,7 +372,7 @@ function renderTree(
         </tr>,
       )
       if (open) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview))
       }
     } else {
       const nameCell = editing ? (
@@ -362,7 +397,7 @@ function renderTree(
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
           <button className="ghost" title="Rename" style={iconBtn}
-            onClick={() => { setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
+            onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
           <button className="ghost" title="Download" style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
           <button className="danger" title="Delete" style={iconBtn}
@@ -371,7 +406,7 @@ function renderTree(
       )
 
       rows.push(
-        <tr key={`f:${c.path}`}>
+        <tr key={`f:${c.path}`} style={{ cursor: editing ? 'default' : 'pointer' }} onClick={() => !editing && onPreview(c.path)}>
           <td style={indent}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}></span>
             <span style={{ display: 'inline-block', width: '1.4rem' }}>{proc ? '⏳' : '📄'}</span>

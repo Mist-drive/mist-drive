@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,6 +267,55 @@ func (c *Client) DownloadFolder(prefix, destPath string) error {
 	return err
 }
 
+// PreviewResult is returned by PreviewFile. Type is "image", "text", or "binary".
+// Content holds a data-URI (image) or plain text; empty for binary.
+type PreviewResult struct {
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
+// PreviewFile fetches a preview of key from the API. Images are returned
+// as data-URIs (base64 JPEG); text as a plain string; binary as an empty
+// Content field with Type "binary".
+func (c *Client) PreviewFile(key string) (PreviewResult, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/api/files/preview?key="+url.QueryEscape(key), nil)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		msg, _ := io.ReadAll(res.Body)
+		return PreviewResult{}, fmt.Errorf("%d: %s", res.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	ptype := res.Header.Get("X-Preview-Type")
+	if ptype == "" {
+		ptype = "binary"
+	}
+	switch ptype {
+	case "image":
+		data, err := io.ReadAll(res.Body)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{Type: "image", Content: "data:image/jpeg;base64," + encodeBase64(data)}, nil
+	case "text":
+		data, err := io.ReadAll(res.Body)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{Type: "text", Content: string(data)}, nil
+	default:
+		return PreviewResult{Type: "binary"}, nil
+	}
+}
+
 // RecomputeUsage asks the API to rescan the user's bucket and rewrite
 // usedBytes from authoritative S3 listings — same endpoint the web UI
 // "recompute usage" link hits. Returns the new used-bytes total.
@@ -403,6 +454,10 @@ func (c *Client) putPart(url string, body io.Reader, size int64) (string, error)
 	}
 	etag := strings.Trim(res.Header.Get("ETag"), `"`)
 	return etag, nil
+}
+
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 func urlEscape(s string) string {

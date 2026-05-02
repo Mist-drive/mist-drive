@@ -145,6 +145,16 @@ func (c *Client) RemoveObjects(ctx context.Context, bucket string, keys []string
 	return nil
 }
 
+// GetObjectRange fetches a byte range of an object. Caller must Close.
+// Used for text previews and content sniffing to avoid downloading entire files.
+func (c *Client) GetObjectRange(ctx context.Context, bucket, key string, start, end int64) (io.ReadCloser, error) {
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(start, end); err != nil {
+		return nil, err
+	}
+	return c.mc.GetObject(ctx, bucket, key, opts)
+}
+
 // GetObject returns a streaming reader for the object. Caller must Close.
 // Used by the folder-zip handler; presigned GET is still preferred for
 // single-file downloads.

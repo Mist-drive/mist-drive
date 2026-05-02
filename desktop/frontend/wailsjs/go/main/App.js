@@ -62,6 +62,10 @@ export function PickFile(arg1) {
   return window['go']['main']['App']['PickFile'](arg1);
 }
 
+export function PreviewFile(arg1) {
+  return window['go']['main']['App']['PreviewFile'](arg1);
+}
+
 export function RecomputeUsage() {
   return window['go']['main']['App']['RecomputeUsage']();
 }

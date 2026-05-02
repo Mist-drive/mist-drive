@@ -55,6 +55,7 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/mkdir", s.mkdir)
 	files.Post("/rename", s.renameFile)
 	files.Post("/recompute-usage", s.recomputeUsage)
+	files.Get("/preview", s.previewFile)
 
 	// WebSocket for push notifications. The JWT middleware already ran
 	// when the route matched (ws handshakes hit /api/ws), so `UID(c)`

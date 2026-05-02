@@ -51,6 +51,20 @@ export namespace apiclient {
 		}
 	}
 	
+	export class PreviewResult {
+	    type: string;
+	    content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.content = source["content"];
+	    }
+	}
 	export class PublicUser {
 	    id: string;
 	    login: string;

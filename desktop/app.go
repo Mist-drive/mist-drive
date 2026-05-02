@@ -492,6 +492,10 @@ func (a *App) RecomputeUsage() (int64, error) {
 	return a.api.RecomputeUsage()
 }
 
+func (a *App) PreviewFile(key string) (apiclient.PreviewResult, error) {
+	return a.api.PreviewFile(key)
+}
+
 // DownloadFolder streams a zip of the given prefix to a user-chosen
 // destination. Mirrors the web app's folder-download feature.
 func (a *App) DownloadFolder(prefix string) (string, error) {

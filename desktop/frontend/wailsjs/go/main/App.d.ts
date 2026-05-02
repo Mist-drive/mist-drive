@@ -34,6 +34,8 @@ export function OpenWebApp():Promise<void>;
 
 export function PickFile(arg1:string):Promise<string>;
 
+export function PreviewFile(arg1:string):Promise<apiclient.PreviewResult>;
+
 export function RecomputeUsage():Promise<number>;
 
 export function RemoveSyncFolder(arg1:number):Promise<void>;

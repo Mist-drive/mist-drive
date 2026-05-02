@@ -71,9 +71,9 @@ Wails bindings regen: `cd desktop && wails generate module`
 
 ### Quick wins
 - **Rename files/folders** — no endpoint yet, users must delete + re-upload
+- **WebSocket first-message auth** — WS currently connects as `/api/ws?token=<JWT>`; token appears in server access logs. Fix: connect without token, client sends `{"type":"auth","token":"..."}` as first message, server validates within a timeout (e.g. 10s) before accepting further messages. Requires bypassing JWT middleware on the WS route and handling auth inside `wsHandler`.
 
 ### Medium effort
-- **File preview** — inline images/PDFs/text via presigned URL modal instead of always downloading
 - **Drag & drop upload (desktop)** — web is done; desktop needs `runtime.OnFileDrop` + Go recursive walker + `UploadLocalPaths(paths, prefix)` binding. See conversation notes for design.
 
 ### Larger features
@@ -82,6 +82,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 - **2FA / TOTP** — auth hardening beyond password-only JWT flow
 
 ### Done
+- ~~**File preview**~~ — `GET /api/files/preview?key=`; images resized to 800px JPEG (72% quality), text first 4KB, binary placeholder; web: right-side sliding panel; desktop: modal popup; `X-Preview-Type` response header drives rendering in shared `PreviewContent` component
 - ~~**Create folder**~~ — `.keep` marker file in S3; filtered in `buildTree`, API returns all objects (web + desktop)
 - ~~**"Remember me" on web**~~ — always localStorage; checkbox persists across logout; desktop mirrors via settings JSON
 - ~~**Search/filter**~~ — client-side search bar over file keys (web + desktop)
