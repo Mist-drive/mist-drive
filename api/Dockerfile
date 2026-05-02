@@ -23,6 +23,7 @@ RUN bun run build
 
 # ── stage 2: build the Go API with the SPA embedded ───────────────────
 FROM golang:1.26-alpine AS builder
+ARG VERSION=dev
 WORKDIR /src
 # Deps first (cached as long as go.mod/go.sum are unchanged). We do
 # NOT run `go mod tidy` here — it would drag in test-only modules on
@@ -33,7 +34,7 @@ COPY api/ ./
 # Overwrite the committed placeholder dist/ with the real build output
 # from stage 1. //go:embed picks it up at compile time.
 COPY --from=web /src/web/dist ./internal/webui/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/mist-drive ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s -X main.Version=${VERSION}" -o /out/mist-drive ./cmd/server
 
 # ── stage 3: minimal runtime image ────────────────────────────────────
 FROM alpine:3.21
