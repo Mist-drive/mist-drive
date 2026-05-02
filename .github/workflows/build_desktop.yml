@@ -90,7 +90,7 @@ jobs:
         run: |
           cd desktop
           wails build -tags webkit2_41 -o ${{ matrix.binary }} \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA::7}"
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v} -X main.commit=${GITHUB_SHA::7}"
 
       - name: Build (Windows)
         if: matrix.platform == 'windows'
@@ -98,7 +98,7 @@ jobs:
         run: |
           cd desktop
           wails build -o ${{ matrix.binary }} \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA::7}"
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v} -X main.commit=${GITHUB_SHA::7}"
 
       - name: Archive (Linux)
         if: matrix.platform == 'linux'

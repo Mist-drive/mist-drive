@@ -1,6 +1,8 @@
 package httpx
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/quota"
@@ -22,7 +24,9 @@ func (s *Server) login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&r); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
 	}
-	if s.Version != "dev" && r.ClientVersion != "" && r.ClientVersion != "dev" && r.ClientVersion != s.Version {
+	clientVer := strings.TrimPrefix(r.ClientVersion, "v")
+	serverVer := strings.TrimPrefix(s.Version, "v")
+	if serverVer != "dev" && clientVer != "" && clientVer != "dev" && clientVer != serverVer {
 		return fiber.NewError(fiber.StatusBadRequest, "client outdated: please download version "+s.Version)
 	}
 	u, err := s.Users.GetByLogin(r.Login)
