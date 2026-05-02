@@ -71,15 +71,19 @@ Wails bindings regen: `cd desktop && wails generate module`
 
 ### Quick wins
 - **Rename files/folders** — no endpoint yet, users must delete + re-upload
-- **Create folder** — web UI only creates folders implicitly via upload path
-- **"Remember me" on web** — session uses `sessionStorage`, lost on tab close
 
 ### Medium effort
 - **File preview** — inline images/PDFs/text via presigned URL modal instead of always downloading
-- **Drag & drop upload** — multipart uploader exists, just needs a drop zone on web
-- **Search/filter** — search bar over file keys for large buckets
+- **Drag & drop upload (desktop)** — web is done; desktop needs `runtime.OnFileDrop` + Go recursive walker + `UploadLocalPaths(paths, prefix)` binding. See conversation notes for design.
 
 ### Larger features
 - **Share links** — time-limited presigned URLs for files without requiring login
 - **Desktop notifications** — surface sync engine events (upload complete, errors) as OS notifications
 - **2FA / TOTP** — auth hardening beyond password-only JWT flow
+
+### Done
+- ~~**Create folder**~~ — `.keep` marker file in S3; filtered in `buildTree`, API returns all objects (web + desktop)
+- ~~**"Remember me" on web**~~ — always localStorage; checkbox persists across logout; desktop mirrors via settings JSON
+- ~~**Search/filter**~~ — client-side search bar over file keys (web + desktop)
+- ~~**Replace file warning**~~ — `ReplaceDialog` with end-truncated paths, collapsible list, keyboard support (web + desktop)
+- ~~**Drag & drop upload (web)**~~ — files + folders onto tree; folder highlight + auto-expand on hover; root drop zone; shared upload pipeline with conflict detection

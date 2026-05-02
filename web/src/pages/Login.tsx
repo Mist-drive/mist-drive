@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, setSession } from '../lib/api'
+import { api, setSession, isRemembered, getSavedLogin } from '../lib/api'
 
 export default function Login() {
   const nav = useNavigate()
-  const [login, setLogin] = useState('')
+  const [login, setLogin] = useState(getSavedLogin)
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(isRemembered)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -14,7 +15,7 @@ export default function Login() {
     setErr(null); setBusy(true)
     try {
       const res = await api.login(login, password)
-      setSession(res.token, res.user)
+      setSession(res.token, res.user, remember)
       nav('/files')
     } catch (e: any) {
       setErr(e.message || 'login failed')
@@ -36,6 +37,15 @@ export default function Login() {
         <label>Password</label>
         <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
         {err && <p className="error">{err}</p>}
+        <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '.5rem', cursor: 'pointer', marginTop: '.4rem' }}>
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={e => setRemember(e.target.checked)}
+            style={{ width: 'auto', margin: 0 }}
+          />
+          Remember me
+        </label>
         <button disabled={busy} style={{ marginTop: '1.4rem', width: '100%' }}>
           {busy ? 'Signing in...' : 'Login'}
         </button>

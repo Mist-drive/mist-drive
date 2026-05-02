@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Login, Logout, Me } from '../wailsjs/go/main/App'
 import { apiclient } from '../wailsjs/go/models'
+import { ConfirmProvider } from './components/ConfirmDialog'
 import LoginScreen from './screens/Login'
 import Home from './screens/Home'
 import './App.css'
@@ -21,24 +22,24 @@ export default function App() {
 
   if (!checked) return <div className="boot">Loading…</div>
 
-  if (!user) {
-    return (
-      <LoginScreen
-        onLogin={async (url, login, password) => {
-          const u = await Login(url, login, password)
-          setUser(u)
-        }}
-      />
-    )
-  }
-
   return (
-    <Home
-      user={user}
-      onLogout={async () => {
-        await Logout()
-        setUser(null)
-      }}
-    />
+    <ConfirmProvider>
+      {!user ? (
+        <LoginScreen
+          onLogin={async (url, login, password, rememberLogin) => {
+            const u = await Login(url, login, password, rememberLogin)
+            setUser(u)
+          }}
+        />
+      ) : (
+        <Home
+          user={user}
+          onLogout={async () => {
+            await Logout()
+            setUser(null)
+          }}
+        />
+      )}
+    </ConfirmProvider>
   )
 }

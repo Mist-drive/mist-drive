@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { GetSettings, ListEnvironments } from '../../wailsjs/go/main/App'
 
 type Props = {
-  onLogin: (apiURL: string, login: string, password: string) => Promise<void>
+  onLogin: (apiURL: string, login: string, password: string, rememberLogin: boolean) => Promise<void>
 }
 
 // Simple centered login card. Pre-fills the API URL from settings so
@@ -15,6 +15,7 @@ export default function Login({ onLogin }: Props) {
   const [custom, setCustom] = useState(false)
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberLogin, setRememberLogin] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -22,6 +23,7 @@ export default function Login({ onLogin }: Props) {
     GetSettings().then((s) => {
       if (s.apiUrl) setApiURL(s.apiUrl)
       if (s.login) setLogin(s.login)
+      setRememberLogin(s.rememberLogin)
     })
     ListEnvironments().then((list) => {
       if (list?.length) setEnvs(list)
@@ -43,7 +45,7 @@ export default function Login({ onLogin }: Props) {
     setErr(null)
     setBusy(true)
     try {
-      await onLogin(apiURL, login, password)
+      await onLogin(apiURL, login, password, rememberLogin)
     } catch (e: any) {
       setErr(String(e?.message ?? e))
     } finally {
@@ -88,6 +90,15 @@ export default function Login({ onLogin }: Props) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
+        <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '.5rem', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={rememberLogin}
+            onChange={(e) => setRememberLogin(e.target.checked)}
+            style={{ width: 'auto', margin: 0 }}
+          />
+          Remember me
+        </label>
         <button type="submit" disabled={busy || !login || !password || !apiURL}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>

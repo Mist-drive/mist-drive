@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, getUser, ObjectInfo, setSession, getToken, PublicUser, onEvent } from '../lib/api'
 import { uploadFile } from '../lib/uploader'
 import { useConfirm } from '../components/ConfirmDialog'
+import ReplaceDialog from '../components/ReplaceDialog'
 
 // webkitdirectory isn't in the default React HTMLInputAttributes type
 declare module 'react' {
@@ -17,8 +18,6 @@ function fmt(n: number) {
   return `${n.toFixed(1)} ${u[i]}`
 }
 
-// Human-friendly duration. "—" when we don't yet have enough data to
-// estimate (no bytes uploaded, or less than half a second of history).
 function fmtEta(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '—'
   if (seconds < 1) return '<1s'
@@ -37,7 +36,7 @@ function etaFor(loaded: number, total: number, startedAt: number): string {
   if (loaded <= 0 || loaded >= total) return '—'
   const elapsed = (Date.now() - startedAt) / 1000
   if (elapsed < 0.5) return '—'
-  const speed = loaded / elapsed // bytes / sec
+  const speed = loaded / elapsed
   return fmtEta((total - loaded) / speed)
 }
 
@@ -49,16 +48,14 @@ type UP = {
   startedAt: number
 }
 
-// How many files upload in parallel. Each file internally parallelises
-// its own multipart parts (see uploader.ts CONCURRENCY).
 const FILE_CONCURRENCY = 4
 
 type TreeNode = {
   name: string
-  path: string           // full key from root
+  path: string
   isDir: boolean
-  size: number           // file size, or sum for dirs
-  lastModified?: string  // file only
+  size: number
+  lastModified?: string
   children?: Record<string, TreeNode>
 }
 
@@ -70,6 +67,7 @@ function buildTree(files: ObjectInfo[]): TreeNode {
     for (let i = 0; i < parts.length; i++) {
       const isLeaf = i === parts.length - 1
       const name = parts[i]
+      if (isLeaf && name === '.keep') break
       node.children = node.children || {}
       if (!node.children[name]) {
         node.children[name] = {
@@ -87,7 +85,6 @@ function buildTree(files: ObjectInfo[]): TreeNode {
       }
     }
   }
-  // compute dir sizes bottom-up
   const sum = (n: TreeNode): number => {
     if (!n.isDir) return n.size
     let s = 0
@@ -101,9 +98,25 @@ function buildTree(files: ObjectInfo[]): TreeNode {
 
 function sortedChildren(n: TreeNode): TreeNode[] {
   return Object.values(n.children || {}).sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1 // dirs first
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
     return a.name.localeCompare(b.name)
   })
+}
+
+async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  const all: FileSystemEntry[] = []
+  while (true) {
+    const batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej))
+    if (!batch.length) break
+    all.push(...batch)
+  }
+  return all
+}
+
+type DragHandlers = {
+  dragOverFolder: string | null
+  onDragEnterFolder: (path: string) => void
+  onFolderDrop: (e: React.DragEvent, path: string) => void
 }
 
 export default function Files() {
@@ -111,54 +124,43 @@ export default function Files() {
   const [me, setMe] = useState<PublicUser | null>(getUser())
   const [recomputing, setRecomputing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  // Only tracks files currently being uploaded. Finished / errored ones
-  // are removed from the map so the panel stays clean.
   const [active, setActive] = useState<Record<string, UP>>({})
   const [queued, setQueued] = useState(0)
   const [done, setDone] = useState(0)
   const [failed, setFailed] = useState(0)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [query, setQuery] = useState('')
+  const [newFolder, setNewFolder] = useState<string | null>(null)
+  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
+  const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
   const confirm = useConfirm()
-
-  // One AbortController per in-flight upload, keyed by the same key as
-  // the `active` map. Lives in a ref because mutating it should not by
-  // itself trigger a re-render — progress updates already do that.
   const controllers = useRef<Map<string, AbortController>>(new Map())
-  // Set when the user clicks "Cancel all" so the worker pool drains
-  // pending jobs without starting them.
   const cancelAll = useRef(false)
-  // Set on the first 413 from /upload/init. Any further queued file
-  // would just bounce off the same quota — cheaper and more honest to
-  // stop the whole batch and surface a clear error.
   const quotaHit = useRef(false)
-  // Used to force a re-render roughly every 500ms while uploads are
-  // running so the ETA keeps ticking down even between progress events.
   const [, setTick] = useState(0)
+  const dragCounter = useRef(0)
+  const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     if (Object.keys(active).length === 0) return
     const t = setInterval(() => setTick((n) => n + 1), 500)
     return () => clearInterval(t)
   }, [active])
 
-  // Warn on tab close / reload / navigation while uploads are in
-  // flight. Downloads are fine — once the browser hits the presigned
-  // URL the transfer is independent of our tab. For uploads the bytes
-  // flow from THIS tab's memory, so leaving kills them mid-part.
   useEffect(() => {
     const busy = Object.keys(active).length > 0 || queued > 0
     if (!busy) return
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault()
-      // Modern browsers ignore the custom string and show their own
-      // generic prompt, but returnValue must be set for the prompt to
-      // actually appear in Chrome/Edge.
       e.returnValue = ''
       return ''
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [active, queued])
+
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
@@ -176,10 +178,6 @@ export default function Files() {
   }
   useEffect(() => { refresh() }, [])
 
-  // Subscribe to server-pushed "files-changed" events so deletes and
-  // uploads triggered from other tabs / the desktop app appear here
-  // without the user hitting refresh. We re-fetch on any message — the
-  // server intentionally doesn't send deltas.
   useEffect(() => {
     return onEvent(() => { refresh() })
   }, [])
@@ -196,82 +194,86 @@ export default function Files() {
     }
   }
 
-  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const list = e.target.files
-    if (!list || list.length === 0) return
+  const runOne = async (key: string, file: File) => {
+    const ctrl = new AbortController()
+    controllers.current.set(key, ctrl)
+    const startedAt = Date.now()
+    setActive(a => ({ ...a, [key]: { key, pct: 0, loaded: 0, total: file.size, startedAt } }))
+    setQueued(q => q - 1)
+    try {
+      await uploadFile(key, file, (loaded, total) => {
+        setActive(a => ({
+          ...a,
+          [key]: { key, pct: Math.round((loaded / total) * 100), loaded, total, startedAt },
+        }))
+      }, ctrl.signal)
+      setDone(d => d + 1)
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        // user-initiated cancel
+      } else {
+        console.error('upload failed:', key, err)
+        setFailed(f => f + 1)
+        if (typeof err?.message === 'string' && err.message.startsWith('413')) {
+          quotaHit.current = true
+          for (const c of controllers.current.values()) c.abort()
+          setErr('Quota exceeded — remaining uploads cancelled.')
+        }
+      }
+    } finally {
+      controllers.current.delete(key)
+      setActive(a => {
+        const { [key]: _, ...rest } = a
+        return rest
+      })
+    }
+  }
 
-    // For folder picks, webkitRelativePath has the full path incl. the
-    // top-level folder name, which becomes the S3 key. For plain file
-    // picks, fall back to the file name.
-    // Note: Chrome shows its own "Upload N files to this site?" prompt
-    // on webkitdirectory inputs, so we don't add a second confirm here.
-    const jobs: { key: string; file: File }[] = Array.from(list).map(f => ({
-      key: (f as any).webkitRelativePath || f.name,
-      file: f,
-    }))
+  const runUploadJobs = async (jobs: { key: string; file: File }[]) => {
+    if (jobs.length === 0) return
     setQueued(q => q + jobs.length)
 
-    const runOne = async ({ key, file }: { key: string; file: File }) => {
-      const ctrl = new AbortController()
-      controllers.current.set(key, ctrl)
-      const startedAt = Date.now()
-      setActive(a => ({ ...a, [key]: { key, pct: 0, loaded: 0, total: file.size, startedAt } }))
-      setQueued(q => q - 1)
-      try {
-        await uploadFile(key, file, (loaded, total) => {
-          setActive(a => ({
-            ...a,
-            [key]: { key, pct: Math.round((loaded / total) * 100), loaded, total, startedAt },
-          }))
-        }, ctrl.signal)
-        setDone(d => d + 1)
-      } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          // user-initiated cancel — stay silent, don't count as failed
-        } else {
-          console.error('upload failed:', key, err)
-          setFailed(f => f + 1)
-          // Stop the batch on quota exhaustion so we don't hammer the
-          // API with doomed init requests. api.req throws with a
-          // "<status>: <body>" message; matching on "413" is enough.
-          if (typeof err?.message === 'string' && err.message.startsWith('413')) {
-            quotaHit.current = true
-            // Abort everything else that's currently mid-upload too —
-            // they're almost certainly on the same trajectory.
-            for (const c of controllers.current.values()) c.abort()
-            setErr('Quota exceeded — remaining uploads cancelled.')
-          }
-        }
-      } finally {
-        controllers.current.delete(key)
-        setActive(a => {
-          const { [key]: _, ...rest } = a
-          return rest
-        })
+    const existingKeys = new Set(files.map(f => f.key))
+    const conflicts = jobs.map(j => j.key).filter(k => existingKeys.has(k))
+    if (conflicts.length > 0) {
+      const ok = await new Promise<boolean>(resolve => {
+        replaceResolve.current = resolve
+        setReplaceConflicts(conflicts)
+      })
+      if (!ok) {
+        setQueued(q => q - jobs.length)
+        return
       }
     }
 
     cancelAll.current = false
     quotaHit.current = false
     setErr(null)
-    // Bounded worker pool over the job list.
     let idx = 0
     const worker = async () => {
       while (idx < jobs.length) {
         const my = idx++
         if (cancelAll.current || quotaHit.current) {
-          // Drain remaining queued jobs silently.
           setQueued(q => q - 1)
           continue
         }
-        await runOne(jobs[my])
+        await runOne(jobs[my].key, jobs[my].file)
       }
     }
     await Promise.all(
       Array.from({ length: Math.min(FILE_CONCURRENCY, jobs.length) }, worker),
     )
-
     await refresh()
+  }
+
+  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files
+    if (!list || list.length === 0) return
+    const jobs = Array.from(list).map(f => ({
+      key: (f as any).webkitRelativePath || f.name,
+      file: f,
+    }))
+    await runUploadJobs(jobs)
     if (fileInput.current) fileInput.current.value = ''
     if (folderInput.current) folderInput.current.value = ''
   }
@@ -303,9 +305,16 @@ export default function Files() {
     refresh()
   }
   const onDownloadFolder = (path: string) => {
-    // Navigating directly lets the browser stream the zip to disk
-    // without buffering it in memory, which matters for big folders.
     window.location.href = api.downloadZipUrl(path + '/')
+  }
+
+  const onMkdir = async () => {
+    if (!newFolder?.trim()) return
+    try {
+      await api.mkdir(newFolder.trim())
+      setNewFolder(null)
+      await refresh()
+    } catch (e: any) { setErr(e.message) }
   }
 
   const onCancelUpload = (key: string) => {
@@ -316,9 +325,54 @@ export default function Files() {
     for (const c of controllers.current.values()) c.abort()
   }
 
-  // Aggregate stats across currently-active uploads. Global speed is
-  // computed from the earliest start time so it reflects the sustained
-  // throughput of the whole batch, not just one file.
+  const clearDragState = () => {
+    dragCounter.current = 0
+    setIsDragging(false)
+    setDragOverFolder(null)
+    if (expandTimerRef.current !== null) {
+      clearTimeout(expandTimerRef.current)
+      expandTimerRef.current = null
+    }
+  }
+
+  const onDragEnterFolder = (path: string) => {
+    setDragOverFolder(path)
+    if (expandTimerRef.current !== null) clearTimeout(expandTimerRef.current)
+    expandTimerRef.current = setTimeout(() => {
+      setExpanded(e => ({ ...e, [path]: true }))
+      expandTimerRef.current = null
+    }, 600)
+  }
+
+  const handleDrop = async (e: React.DragEvent, targetPrefix: string) => {
+    e.preventDefault()
+    clearDragState()
+    const items = Array.from(e.dataTransfer.items)
+    const jobs: { key: string; file: File }[] = []
+    const prefix = targetPrefix ? targetPrefix + '/' : ''
+
+    const processEntry = async (entry: FileSystemEntry, p: string) => {
+      if (entry.isFile) {
+        const file = await new Promise<File>((res, rej) =>
+          (entry as FileSystemFileEntry).file(res, rej),
+        )
+        jobs.push({ key: p + entry.name, file })
+      } else if (entry.isDirectory) {
+        const subs = await readAllEntries((entry as FileSystemDirectoryEntry).createReader())
+        await Promise.all(subs.map(sub => processEntry(sub, p + entry.name + '/')))
+      }
+    }
+
+    await Promise.all(
+      items
+        .map(item => item.webkitGetAsEntry?.())
+        .filter((entry): entry is FileSystemEntry => !!entry)
+        .map(entry => processEntry(entry, prefix)),
+    )
+
+    await runUploadJobs(jobs)
+  }
+
   const activeList = Object.values(active)
   let globalLoaded = 0
   let globalTotal = 0
@@ -336,9 +390,6 @@ export default function Files() {
     return fmtEta((globalTotal - globalLoaded) / speed)
   })()
 
-  // File / folder counts across the full (unfiltered) listing — shown
-  // in the bottom usage bar. Folders are the distinct non-leaf path
-  // prefixes; files are just files.length.
   const folderSet = new Set<string>()
   for (const f of files) {
     const parts = f.key.split('/').filter(Boolean)
@@ -346,20 +397,14 @@ export default function Files() {
       folderSet.add(parts.slice(0, i).join('/'))
     }
   }
-  const totalFiles = files.length
+  const totalFiles = files.filter(f => !f.key.endsWith('/.keep')).length
   const totalFolders = folderSet.size
 
-  // Client-side search: case-insensitive substring match on the full
-  // key. All the data is already in memory (the full listing is tiny —
-  // a few hundred KB gzipped even for GBs of files) so there's no
-  // reason to round-trip the API.
   const q = query.trim().toLowerCase()
   const filteredFiles = q
     ? files.filter((f) => f.key.toLowerCase().includes(q))
     : files
 
-  // When a search is active, auto-expand every ancestor folder of a
-  // match so the hits are actually visible without manual clicking.
   const effectiveExpanded = q
     ? (() => {
         const open: Record<string, boolean> = { ...expanded }
@@ -373,24 +418,18 @@ export default function Files() {
       })()
     : expanded
 
+  const dragHandlers: DragHandlers = { dragOverFolder, onDragEnterFolder, onFolderDrop: handleDrop }
+
   return (
-    <div>
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        onChange={onPick}
-        style={{ display: 'none' }}
-      />
-      <input
-        ref={folderInput}
-        type="file"
-        multiple
-        webkitdirectory=""
-        directory=""
-        onChange={onPick}
-        style={{ display: 'none' }}
-      />
+    <>
+    <div
+      onDragEnter={(e) => { e.preventDefault(); dragCounter.current++; setIsDragging(true) }}
+      onDragLeave={() => { dragCounter.current--; if (dragCounter.current === 0) clearDragState() }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => handleDrop(e, '')}
+    >
+      <input ref={fileInput} type="file" multiple onChange={onPick} style={{ display: 'none' }} />
+      <input ref={folderInput} type="file" multiple webkitdirectory="" directory="" onChange={onPick} style={{ display: 'none' }} />
       {(activeList.length > 0 || queued > 0) && (
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: '.8rem', gap: '.8rem' }}>
@@ -409,17 +448,9 @@ export default function Files() {
           {activeList.map(up => (
             <div key={up.key} style={{ marginBottom: '.7rem' }}>
               <div className="row" style={{ justifyContent: 'space-between', gap: '.8rem', minWidth: 0 }}>
-                {/* flex:1 + minWidth:0 lets the path shrink and ellipsize
-                    instead of pushing the stats onto a second line. */}
                 <span
                   title={up.key}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
+                  style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
                   {up.key}
                 </span>
@@ -455,47 +486,65 @@ export default function Files() {
           </span>
         )}
       </div>
-      <table>
-        <thead><tr>
-          <th>
-            Name
-            {/* Collapse-all — intentionally no expand-all (a blind
-                expand on a large bucket would render thousands of
-                rows, whereas collapsing is what users actually want). */}
-            <button
-              type="button"
-              className="ghost"
-              title="Collapse all folders"
-              onClick={() => setExpanded({})}
-              style={{ padding: '.1rem .4rem', marginLeft: '.5rem', fontSize: '0.8rem', lineHeight: 1 }}
-            >⊟</button>
-          </th>
-          <th>Size</th>
-          <th>Modified</th>
-          <th>
-            <div className="row" style={{ gap: '.5rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-              <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
-                Upload files
-              </button>
-              <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>
-                Upload folder
-              </button>
-            </div>
-          </th>
-        </tr></thead>
-        <tbody>
-          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder)}
-        </tbody>
-      </table>
+      {newFolder !== null && (
+        <div className="row" style={{ marginBottom: '.6rem', gap: '.5rem' }}>
+          <input
+            autoFocus
+            type="text"
+            placeholder="folder/path"
+            value={newFolder}
+            onChange={(e) => setNewFolder(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onMkdir()
+              if (e.key === 'Escape') setNewFolder(null)
+            }}
+            style={{ flex: 1 }}
+          />
+          <button type="button" onClick={onMkdir} disabled={!newFolder.trim()}>Create</button>
+          <button type="button" className="ghost" onClick={() => setNewFolder(null)}>Cancel</button>
+        </div>
+      )}
+      <div
+        style={isDragging && dragOverFolder === null ? {
+          outline: '2px dashed rgba(59, 130, 246, 0.6)',
+          borderRadius: '6px',
+        } : undefined}
+      >
+        <table onDragEnter={() => setDragOverFolder(null)}>
+          <thead><tr>
+            <th>
+              Name
+              <button
+                type="button"
+                className="ghost"
+                title="Collapse all folders"
+                onClick={() => setExpanded({})}
+                style={{ padding: '.1rem .4rem', marginLeft: '.5rem', fontSize: '0.8rem', lineHeight: 1 }}
+              >⊟</button>
+            </th>
+            <th>Size</th>
+            <th>Modified</th>
+            <th>
+              <div className="row" style={{ gap: '.5rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                <button type="button" className="ghost" onClick={() => setNewFolder('')}>
+                  New folder
+                </button>
+                <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
+                  Upload files
+                </button>
+                <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>
+                  Upload folder
+                </button>
+              </div>
+            </th>
+          </tr></thead>
+          <tbody>
+            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers)}
+          </tbody>
+        </table>
+      </div>
       {me && (
-        <div
-          className="muted"
-          style={{
-            marginTop: '1rem',
-            textAlign: 'center',
-            fontSize: '0.85rem',
-          }}
-        >
+        <div className="muted" style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>
           {fmt(me.usedBytes)} / {fmt(me.quotaBytes)} used
           {' '}({totalFiles} file{totalFiles === 1 ? '' : 's'},{' '}
           {totalFolders} folder{totalFolders === 1 ? '' : 's'})
@@ -514,6 +563,14 @@ export default function Files() {
         </div>
       )}
     </div>
+    {replaceConflicts.length > 0 && (
+      <ReplaceDialog
+        conflicts={replaceConflicts}
+        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.(true) }}
+        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
+      />
+    )}
+    </>
   )
 }
 
@@ -526,6 +583,7 @@ function renderTree(
   onDelete: (k: string) => void,
   onDeleteFolder: (p: string) => void,
   onDownloadFolder: (p: string) => void,
+  dnd: DragHandlers,
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
@@ -549,8 +607,15 @@ function renderTree(
     )
     if (c.isDir) {
       const isOpen = !!expanded[c.path]
+      const isHovered = dnd.dragOverFolder === c.path
       rows.push(
-        <tr key={`d:${c.path}`}>
+        <tr
+          key={`d:${c.path}`}
+          onDragEnter={(e) => { e.stopPropagation(); dnd.onDragEnterFolder(c.path) }}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onDrop={(e) => { e.stopPropagation(); dnd.onFolderDrop(e, c.path) }}
+          style={isHovered ? { backgroundColor: 'rgba(59, 130, 246, 0.15)' } : undefined}
+        >
           <td style={{ ...indent, cursor: 'pointer' }} onClick={() => toggle(c.path)}>
             <span className="muted" style={{ display: 'inline-block', width: '1.2rem' }}>
               {isOpen ? '▾' : '▸'}
@@ -564,7 +629,7 @@ function renderTree(
         </tr>,
       )
       if (isOpen) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd))
       }
     } else {
       rows.push(

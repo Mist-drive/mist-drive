@@ -15,21 +15,35 @@ export type ObjectInfo = {
 
 const TOKEN_KEY = 'mist.token'
 const USER_KEY = 'mist.user'
+const REMEMBER_KEY = 'mist.remember'
+const SAVED_LOGIN_KEY = 'mist.savedLogin'
 
 export function getToken(): string | null {
-  return sessionStorage.getItem(TOKEN_KEY)
+  return localStorage.getItem(TOKEN_KEY)
 }
 export function getUser(): PublicUser | null {
-  const s = sessionStorage.getItem(USER_KEY)
+  const s = localStorage.getItem(USER_KEY)
   return s ? JSON.parse(s) : null
 }
-export function setSession(token: string, user: PublicUser) {
-  sessionStorage.setItem(TOKEN_KEY, token)
-  sessionStorage.setItem(USER_KEY, JSON.stringify(user))
+export function isRemembered(): boolean {
+  return localStorage.getItem(REMEMBER_KEY) === 'true'
+}
+export function getSavedLogin(): string {
+  return localStorage.getItem(SAVED_LOGIN_KEY) ?? ''
+}
+export function setSession(token: string, user: PublicUser, remember = isRemembered()) {
+  localStorage.setItem(TOKEN_KEY, token)
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+  localStorage.setItem(REMEMBER_KEY, remember ? 'true' : 'false')
+  if (remember) {
+    localStorage.setItem(SAVED_LOGIN_KEY, user.login)
+  } else {
+    localStorage.removeItem(SAVED_LOGIN_KEY)
+  }
 }
 export function clearSession() {
-  sessionStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(USER_KEY)
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
 }
 
 // Global in-flight counter for the loading bar. We only instrument
@@ -148,6 +162,11 @@ export const api = {
     req<{ ok: boolean; size: number }>('/api/files/upload/complete', {
       method: 'POST',
       body: JSON.stringify({ uploadId, parts }),
+    }),
+  mkdir: (path: string) =>
+    req<{ ok: boolean }>('/api/files/mkdir', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
     }),
   recomputeUsage: () =>
     req<{ ok: boolean; usedBytes: number; count: number }>(

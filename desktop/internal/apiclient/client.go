@@ -175,6 +175,10 @@ func (c *Client) DeleteFile(key string) error {
 	return c.do("DELETE", "/api/files?key="+urlEscape(key), nil, nil)
 }
 
+func (c *Client) CreateFolder(path string) error {
+	return c.do("POST", "/api/files/mkdir", map[string]string{"path": path}, nil)
+}
+
 func (c *Client) DeleteFolder(prefix string) error {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"

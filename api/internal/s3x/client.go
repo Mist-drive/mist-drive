@@ -1,6 +1,7 @@
 package s3x
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -149,6 +150,11 @@ func (c *Client) RemoveObjects(ctx context.Context, bucket string, keys []string
 // single-file downloads.
 func (c *Client) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
 	return c.mc.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+}
+
+func (c *Client) PutEmptyObject(ctx context.Context, bucket, key string) error {
+	_, err := c.mc.PutObject(ctx, bucket, key, bytes.NewReader([]byte{}), 0, minio.PutObjectOptions{})
+	return err
 }
 
 func (c *Client) StatObject(ctx context.Context, bucket, key string) (int64, error) {

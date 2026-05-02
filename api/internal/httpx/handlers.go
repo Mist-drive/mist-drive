@@ -46,6 +46,7 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/upload/init", s.uploadInit)
 	files.Post("/upload/complete", s.uploadComplete)
 	files.Post("/upload/abort", s.uploadAbort)
+	files.Post("/mkdir", s.mkdir)
 	files.Post("/recompute-usage", s.recomputeUsage)
 
 	// WebSocket for push notifications. The JWT middleware already ran

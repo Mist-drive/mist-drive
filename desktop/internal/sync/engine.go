@@ -177,6 +177,7 @@ func (e *Engine) ClearStatus() {
 	e.status.LastError = ""
 	e.status.Errors = 0
 	e.status.InFlight = ""
+	e.log = e.log[:0]
 }
 
 // SetAPI swaps the underlying API client. Must be called while the

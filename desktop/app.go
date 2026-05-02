@@ -31,6 +31,9 @@ type App struct {
 	// close-window event is allowed through OnBeforeClose instead of
 	// being intercepted into a "minimize to tray".
 	forceQuit bool
+	// pickedLocalPath holds the local file path from the last PickFile
+	// call so UploadPicked can retrieve it without exposing it to JS.
+	pickedLocalPath string
 }
 
 func NewApp() *App {
@@ -107,7 +110,7 @@ func (a *App) SaveSettings(s settings.Settings) error {
 // Login authenticates against the API and stores the resulting JWT in
 // settings on success. Returns the PublicUser so the frontend can show
 // "connected as ..." without a second round-trip.
-func (a *App) Login(apiURL, login, password string) (apiclient.PublicUser, error) {
+func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclient.PublicUser, error) {
 	// Build a fresh client against the URL the user just typed —
 	// that way a login attempt with a new host doesn't require a
 	// separate "save settings" step first.
@@ -120,6 +123,7 @@ func (a *App) Login(apiURL, login, password string) (apiclient.PublicUser, error
 	s.APIURL = apiURL
 	s.JWT = token
 	s.Login = user.Login
+	s.RememberLogin = rememberLogin
 	if err := a.settings.Save(s); err != nil {
 		return apiclient.PublicUser{}, err
 	}
@@ -184,7 +188,9 @@ func (a *App) beforeClose(ctx context.Context) bool {
 func (a *App) Logout() error {
 	s := a.settings.Get()
 	s.JWT = ""
-	s.Login = ""
+	if !s.RememberLogin {
+		s.Login = ""
+	}
 	if err := a.settings.Save(s); err != nil {
 		return err
 	}
@@ -211,6 +217,11 @@ func (a *App) Me() (apiclient.PublicUser, error) {
 // desktop file browser renders a tree from this, same as the web UI.
 func (a *App) ListFiles() ([]apiclient.ObjectInfo, error) {
 	return a.api.ListFiles()
+}
+
+// CreateFolder creates an empty folder by writing a zero-byte .keep marker.
+func (a *App) CreateFolder(path string) error {
+	return a.api.CreateFolder(path)
 }
 
 // DeleteFile removes a file. If the key lives under an upload-enabled
@@ -268,6 +279,37 @@ func (a *App) findUploadingFolderForKey(key string) (settings.SyncFolder, string
 		}
 	}
 	return settings.SyncFolder{}, "", false
+}
+
+// PickFile opens a native file picker and returns the intended remote
+// key without uploading. The local path is stored internally so
+// UploadPicked can use it without exposing filesystem paths to JS.
+// Returns an empty string if the user cancelled.
+func (a *App) PickFile(remotePrefix string) (string, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select a file to upload",
+	})
+	if err != nil || path == "" {
+		a.pickedLocalPath = ""
+		return "", err
+	}
+	name := filepath.Base(path)
+	key := name
+	if remotePrefix != "" {
+		key = strings.TrimSuffix(remotePrefix, "/") + "/" + name
+	}
+	a.pickedLocalPath = path
+	return key, nil
+}
+
+// UploadPicked uploads the file selected by the last PickFile call.
+func (a *App) UploadPicked(key string) error {
+	if a.pickedLocalPath == "" {
+		return fmt.Errorf("no file picked")
+	}
+	defer func() { a.pickedLocalPath = "" }()
+	s := a.settings.Get()
+	return a.api.UploadFile(a.pickedLocalPath, key, s.MaxConcurrentUploads)
 }
 
 // UploadFile opens a native file picker and uploads the selected file

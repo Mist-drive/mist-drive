@@ -25,6 +25,25 @@ func (s *Server) listFiles(c *fiber.Ctx) error {
 	return c.JSON(objs)
 }
 
+func (s *Server) mkdir(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "no user")
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := c.BodyParser(&body); err != nil || strings.TrimSpace(body.Path) == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "missing path")
+	}
+	key := strings.Trim(body.Path, "/") + "/.keep"
+	if err := s.S3.PutEmptyObject(c.Context(), u.Bucket(), key); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	s.publishChange(u.ID)
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 func (s *Server) deleteFile(c *fiber.Ctx) error {
 	u, err := s.currentUser(c)
 	if err != nil {
@@ -156,6 +175,9 @@ func (s *Server) downloadZip(c *fiber.Ctx) error {
 		zw := zip.NewWriter(w)
 		defer zw.Close()
 		for _, o := range objs {
+			if strings.HasSuffix(o.Key, "/.keep") {
+				continue
+			}
 			rel := strings.TrimPrefix(o.Key, prefix)
 			if rel == "" {
 				rel = path.Base(o.Key)

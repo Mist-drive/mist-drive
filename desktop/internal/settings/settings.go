@@ -36,6 +36,7 @@ type SyncFolder struct {
 type EnvSettings struct {
 	JWT                  string       `json:"jwt"`
 	Login                string       `json:"login"`
+	RememberLogin        bool         `json:"rememberLogin"`
 	Folders              []SyncFolder `json:"folders"`
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
@@ -56,6 +57,7 @@ type Settings struct {
 	APIURL               string       `json:"apiUrl"`
 	JWT                  string       `json:"jwt"`
 	Login                string       `json:"login"`
+	RememberLogin        bool         `json:"rememberLogin"`
 	Folders              []SyncFolder `json:"folders"`
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
@@ -209,6 +211,7 @@ func (st *Store) Get() Settings {
 		APIURL:               st.d.ActiveEnv,
 		JWT:                  e.JWT,
 		Login:                e.Login,
+		RememberLogin:        e.RememberLogin,
 		Folders:              e.Folders,
 		MaxConcurrentUploads: e.MaxConcurrentUploads,
 		MaxUploadRateKBps:    e.MaxUploadRateKBps,
@@ -239,6 +242,7 @@ func (st *Store) Save(s Settings) error {
 	}
 	e.JWT = s.JWT
 	e.Login = s.Login
+	e.RememberLogin = s.RememberLogin
 	e.Folders = s.Folders
 	e.MaxConcurrentUploads = s.MaxConcurrentUploads
 	e.MaxUploadRateKBps = s.MaxUploadRateKBps

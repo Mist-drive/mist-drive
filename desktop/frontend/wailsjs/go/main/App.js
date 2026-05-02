@@ -6,6 +6,10 @@ export function AddSyncFolder() {
   return window['go']['main']['App']['AddSyncFolder']();
 }
 
+export function CreateFolder(arg1) {
+  return window['go']['main']['App']['CreateFolder'](arg1);
+}
+
 export function DeleteFile(arg1) {
   return window['go']['main']['App']['DeleteFile'](arg1);
 }
@@ -38,8 +42,8 @@ export function ListFiles() {
   return window['go']['main']['App']['ListFiles']();
 }
 
-export function Login(arg1, arg2, arg3) {
-  return window['go']['main']['App']['Login'](arg1, arg2, arg3);
+export function Login(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['Login'](arg1, arg2, arg3, arg4);
 }
 
 export function Logout() {
@@ -52,6 +56,10 @@ export function Me() {
 
 export function OpenWebApp() {
   return window['go']['main']['App']['OpenWebApp']();
+}
+
+export function PickFile(arg1) {
+  return window['go']['main']['App']['PickFile'](arg1);
 }
 
 export function RecomputeUsage() {
@@ -96,4 +104,8 @@ export function SyncStatus() {
 
 export function UploadFile(arg1) {
   return window['go']['main']['App']['UploadFile'](arg1);
+}
+
+export function UploadPicked(arg1) {
+  return window['go']['main']['App']['UploadPicked'](arg1);
 }

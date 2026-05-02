@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useConfirm } from '../components/ConfirmDialog'
 import {
+  CreateFolder,
   DeleteFile,
   DeleteFolder,
   DownloadFile,
   DownloadFolder,
   ListFiles,
+  PickFile,
   RecomputeUsage,
-  UploadFile,
+  UploadPicked,
 } from '../../wailsjs/go/main/App'
+import ReplaceDialog from '../components/ReplaceDialog'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 
@@ -35,6 +39,7 @@ function buildTree(files: apiclient.ObjectInfo[]): TreeNode {
     for (let i = 0; i < parts.length; i++) {
       const leaf = i === parts.length - 1
       const name = parts[i]
+      if (leaf && name === '.keep') break  // folder marker — create parent dirs but no file node
       node.children = node.children || {}
       if (!node.children[name]) {
         node.children[name] = {
@@ -81,6 +86,10 @@ export default function Files({ onQuotaChange }: Props) {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null) // status line during uploads/downloads
   const [query, setQuery] = useState('')
+  const [newFolder, setNewFolder] = useState<string | null>(null)
+  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([])
+  const replaceResolve = useRef<((ok: boolean) => void) | null>(null)
+  const confirm = useConfirm()
 
   const refresh = async () => {
     try { setFiles((await ListFiles()) || []) }
@@ -103,11 +112,19 @@ export default function Files({ onQuotaChange }: Props) {
   }
 
   const onUpload = async () => {
-    const key = await withBusy('Uploading…', () => UploadFile(''))
-    if (key) {
-      await refresh()
-      onQuotaChange?.()
+    const key = await withBusy('Picking file…', () => PickFile(''))
+    if (!key) return
+    const conflict = files.some(f => f.key === key)
+    if (conflict) {
+      const ok = await new Promise<boolean>(resolve => {
+        replaceResolve.current = resolve
+        setReplaceConflicts([key])
+      })
+      if (!ok) return
     }
+    await withBusy('Uploading…', () => UploadPicked(key))
+    await refresh()
+    onQuotaChange?.()
   }
   const onDownload = async (key: string) => {
     const dest = await withBusy('Downloading…', () => DownloadFile(key))
@@ -116,13 +133,15 @@ export default function Files({ onQuotaChange }: Props) {
     setTimeout(() => setBusy(null), 2500)
   }
   const onDelete = async (key: string) => {
-    if (!confirm(`Delete ${key}?`)) return
+    const ok = await confirm({ title: 'Delete file', message: `Delete ${key}? This cannot be undone.`, confirmText: 'Delete', danger: true })
+    if (!ok) return
     await withBusy('Deleting…', () => DeleteFile(key))
     await refresh()
     onQuotaChange?.()
   }
   const onDeleteFolder = async (path: string) => {
-    if (!confirm(`Delete ${path}/ and everything inside?`)) return
+    const ok = await confirm({ title: 'Delete folder', message: `Delete ${path}/ and everything inside? This cannot be undone.`, confirmText: 'Delete', danger: true })
+    if (!ok) return
     await withBusy('Deleting folder…', () => DeleteFolder(path))
     await refresh()
     onQuotaChange?.()
@@ -132,6 +151,13 @@ export default function Files({ onQuotaChange }: Props) {
     if (dest) setBusy(`Saved to ${dest}`)
     setTimeout(() => setBusy(null), 2500)
   }
+  const onMkdir = async () => {
+    if (!newFolder?.trim()) return
+    await withBusy('Creating folder…', () => CreateFolder(newFolder.trim()))
+    setNewFolder(null)
+    await refresh()
+  }
+
   const onRecompute = async () => {
     await withBusy('Recomputing…', () => RecomputeUsage())
     onQuotaChange?.()
@@ -160,11 +186,13 @@ export default function Files({ onQuotaChange }: Props) {
     : expanded
 
   return (
+    <>
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
         <h3 style={{ margin: 0 }}>Files</h3>
         <div className="row" style={{ gap: '.5rem' }}>
           {busy && <span className="muted">{busy}</span>}
+          <button className="ghost" onClick={() => setNewFolder('')} disabled={!!busy}>New folder</button>
           <button className="ghost" onClick={onUpload} disabled={!!busy}>Upload file</button>
         </div>
       </div>
@@ -183,6 +211,24 @@ export default function Files({ onQuotaChange }: Props) {
           </span>
         )}
       </div>
+      {newFolder !== null && (
+        <div className="row" style={{ marginBottom: '.6rem', gap: '.5rem' }}>
+          <input
+            autoFocus
+            type="text"
+            placeholder="folder/path"
+            value={newFolder}
+            onChange={(e) => setNewFolder(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onMkdir()
+              if (e.key === 'Escape') setNewFolder(null)
+            }}
+            style={{ flex: 1 }}
+          />
+          <button onClick={onMkdir} disabled={!newFolder.trim()}>Create</button>
+          <button className="ghost" onClick={() => setNewFolder(null)}>Cancel</button>
+        </div>
+      )}
       <table>
         <thead>
           <tr>
@@ -222,6 +268,14 @@ export default function Files({ onQuotaChange }: Props) {
         >recompute usage</a>
       </div>
     </div>
+    {replaceConflicts.length > 0 && (
+      <ReplaceDialog
+        conflicts={replaceConflicts}
+        onConfirm={() => { setReplaceConflicts([]); replaceResolve.current?.(true) }}
+        onCancel={() => { setReplaceConflicts([]); replaceResolve.current?.(false) }}
+      />
+    )}
+    </>
   )
 }
 
