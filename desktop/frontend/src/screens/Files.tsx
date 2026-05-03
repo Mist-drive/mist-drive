@@ -28,6 +28,7 @@ import UploadCard from '@shared/components/UploadCard'
 import { type UploadEntry } from '@shared/lib/upload'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { is401, notifySessionExpired } from '../session'
 
 
 type Props = { onQuotaChange?: () => void; user: apiclient.PublicUser }
@@ -66,7 +67,10 @@ export default function Files({ onQuotaChange, user }: Props) {
       setFiles(resp.objects || [])
       setProcessing(resp.processing || [])
     }
-    catch (e: any) { setErr(String(e?.message ?? e)) }
+    catch (e: any) {
+      if (is401(e)) { notifySessionExpired(); return }
+      setErr(String(e?.message ?? e))
+    }
     finally { endLoading() }
   }
   useEffect(() => {
@@ -114,7 +118,10 @@ export default function Files({ onQuotaChange, user }: Props) {
   const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
     setBusy(label); setErr(null); startLoading()
     try { return await fn() }
-    catch (e: any) { setErr(String(e?.message ?? e)); return null }
+    catch (e: any) {
+      if (is401(e)) { notifySessionExpired(); return null }
+      setErr(String(e?.message ?? e)); return null
+    }
     finally { setBusy(null); endLoading() }
   }
 

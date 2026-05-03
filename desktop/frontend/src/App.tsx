@@ -4,6 +4,7 @@ import { apiclient } from '../wailsjs/go/models'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from '@shared/components/LoadingBar'
 import { startLoading, endLoading } from '@shared/lib/loading'
+import { onSessionExpired } from './session'
 import LoginScreen from './screens/Login'
 import Home from './screens/Home'
 
@@ -13,6 +14,8 @@ import Home from './screens/Home'
 export default function App() {
   const [user, setUser] = useState<apiclient.PublicUser | null>(null)
   const [checked, setChecked] = useState(false)
+
+  useEffect(() => onSessionExpired(() => setUser(null)), [])
 
   useEffect(() => {
     startLoading()

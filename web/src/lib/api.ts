@@ -117,6 +117,10 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     const res = await fetch(path, { ...init, headers })
     if (!res.ok) {
+      if (res.status === 401) {
+        clearSession()
+        window.location.replace('/login')
+      }
       const text = await res.text()
       throw new Error(`${res.status}: ${text || res.statusText}`)
     }
@@ -198,7 +202,10 @@ export const api = {
     const res = await fetch(`/api/files/preview?key=${encodeURIComponent(key)}`, {
       headers: tok ? { Authorization: `Bearer ${tok}` } : {},
     })
-    if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+    if (!res.ok) {
+      if (res.status === 401) { clearSession(); window.location.replace('/login') }
+      throw new Error(`${res.status}: ${res.statusText}`)
+    }
     const ptype = res.headers.get('X-Preview-Type') ?? 'binary'
     if (ptype === 'image') {
       const blob = await res.blob()
