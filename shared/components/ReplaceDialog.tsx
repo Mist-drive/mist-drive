@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from '@shared/lib/i18n'
 
 export type ConflictEntry = {
   key: string
@@ -23,9 +24,9 @@ const pathStyle: React.CSSProperties = {
 }
 
 export default function ReplaceDialog({ conflicts, onConfirm, onDiff, onCancel }: Props) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const confirmBtn = useRef<HTMLButtonElement>(null)
-  const multi = conflicts.length > 1
   const diffCount = conflicts.filter(c => c.incomingSize !== c.existingSize).length
 
   useEffect(() => {
@@ -44,9 +45,9 @@ export default function ReplaceDialog({ conflicts, onConfirm, onDiff, onCancel }
       onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
     >
       <div className="modal" role="dialog" aria-modal="true">
-        <h3 className="modal-title">Replace existing {multi ? 'files' : 'file'}?</h3>
+        <h3 className="modal-title">{t('replace.title', { count: conflicts.length })}</h3>
         <div className="modal-message">
-          {!multi ? (
+          {conflicts.length === 1 ? (
             <span style={pathStyle}>{conflicts[0].key}</span>
           ) : (
             <>
@@ -57,7 +58,7 @@ export default function ReplaceDialog({ conflicts, onConfirm, onDiff, onCancel }
                 style={{ padding: 0, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: expanded ? '.6rem' : 0 }}
               >
                 <span>{expanded ? '▾' : '▸'}</span>
-                {conflicts.length} files will be replaced
+                {t('replace.willReplace', { count: conflicts.length })}
               </button>
               {expanded && (
                 <ul style={{ maxHeight: '10rem', overflowY: 'auto', listStyle: 'none', margin: 0, padding: 0 }}>
@@ -72,15 +73,15 @@ export default function ReplaceDialog({ conflicts, onConfirm, onDiff, onCancel }
           )}
         </div>
         <div className="modal-actions">
-          <button className="ghost" onClick={onCancel}>Cancel</button>
+          <button className="ghost" onClick={onCancel}>{t('replace.cancel')}</button>
           <button
             onClick={onDiff}
             disabled={diffCount === 0}
-            title={diffCount === 0 ? 'All conflicting files are identical (same size)' : `Upload only the ${diffCount} file${diffCount > 1 ? 's' : ''} with a different size`}
+            title={diffCount === 0 ? t('replace.diffTooltipAllSame') : t('replace.diffTooltip', { count: diffCount })}
           >
-            Diff ({diffCount})
+            {t('replace.diff', { count: diffCount })}
           </button>
-          <button ref={confirmBtn} onClick={onConfirm}>Replace ({conflicts.length})</button>
+          <button ref={confirmBtn} onClick={onConfirm}>{t('replace.replace', { count: conflicts.length })}</button>
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react'
 import Logo from './Logo'
+import { useTranslation } from '@shared/lib/i18n'
 
 type Props = {
   version?: string
@@ -30,6 +31,7 @@ export default function LoginCard({
   submitDisabled,
   onSubmit,
 }: Props) {
+  const { t } = useTranslation()
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={onSubmit}>
@@ -38,13 +40,13 @@ export default function LoginCard({
         </div>
         {serverSlot && (
           <>
-            <label>Server</label>
+            <label>{t('login.server')}</label>
             {serverSlot}
           </>
         )}
-        <label>Login</label>
+        <label>{t('login.login')}</label>
         <input value={login} onChange={e => onLoginChange(e.target.value)} autoFocus={!serverSlot} />
-        <label>Password</label>
+        <label>{t('login.password')}</label>
         <input type="password" value={password} onChange={e => onPasswordChange(e.target.value)} />
         {err && <p className="error">{err}</p>}
         <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '.5rem', cursor: 'pointer', marginTop: '.4rem' }}>
@@ -54,10 +56,10 @@ export default function LoginCard({
             onChange={e => onRememberChange(e.target.checked)}
             style={{ width: 'auto', margin: 0 }}
           />
-          Remember me
+          {t('login.rememberMe')}
         </label>
         <button type="submit" disabled={busy || submitDisabled} style={{ marginTop: '1.4rem', width: '100%' }}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? t('login.signingIn') : t('login.signIn')}
         </button>
       </form>
     </div>

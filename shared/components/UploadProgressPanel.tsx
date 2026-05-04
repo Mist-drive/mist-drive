@@ -1,5 +1,6 @@
 import { fmt } from '@shared/lib/format'
 import { etaFor, type UploadEntry } from '@shared/lib/upload'
+import { useTranslation } from '@shared/lib/i18n'
 
 type Props = {
   entries: UploadEntry[]
@@ -7,6 +8,7 @@ type Props = {
 }
 
 export default function UploadProgressPanel({ entries, onCancel }: Props) {
+  const { t } = useTranslation()
   if (entries.length === 0) return null
   return (
     <>
@@ -25,7 +27,7 @@ export default function UploadProgressPanel({ entries, onCancel }: Props) {
             {onCancel && (
               <button
                 className="ghost"
-                title="Cancel this upload"
+                title={t('upload.cancelOne')}
                 onClick={() => onCancel(up.key)}
                 style={{ flexShrink: 0, padding: '.25rem .55rem', fontSize: '0.8rem' }}
               >✕</button>

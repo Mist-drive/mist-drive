@@ -34,8 +34,8 @@ services:
       UPLOAD_TTL_HOURS: ${UPLOAD_TTL_HOURS}
       LOG_LEVEL: ${LOG_LEVEL}
     volumes:
-      - ./data/api:/app/data/api
-      - ./data/logs:/app/data/logs
+      - ./data/api:/app/data
+      - ./data/api/logs:/app/logs
     depends_on:
       minio:
         condition: service_healthy

@@ -1,3 +1,5 @@
+import { useTranslation } from '@shared/lib/i18n'
+
 export type PreviewResult = {
   type: 'image' | 'text' | 'binary'
   content?: string
@@ -11,6 +13,7 @@ type Props = {
 }
 
 export default function PreviewContent({ filename, result, loading, onClose }: Props) {
+  const { t } = useTranslation()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{
@@ -36,7 +39,7 @@ export default function PreviewContent({ filename, result, loading, onClose }: P
         </span>
         <button
           onClick={onClose}
-          title="Close"
+          title={t('preview.close')}
           style={{
             flexShrink: 0,
             marginLeft: '.75rem',
@@ -62,7 +65,7 @@ export default function PreviewContent({ filename, result, loading, onClose }: P
         justifyContent: loading || !result || result.type !== 'text' ? 'center' : 'flex-start',
       }}>
         {loading ? (
-          <span className="muted">Loading…</span>
+          <span className="muted">{t('preview.loading')}</span>
         ) : !result ? null : result.type === 'image' ? (
           <img
             src={result.content}
@@ -85,7 +88,7 @@ export default function PreviewContent({ filename, result, loading, onClose }: P
         ) : (
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
             <div style={{ fontSize: '2.5rem', marginBottom: '.5rem' }}>📦</div>
-            <span className="muted" style={{ fontSize: '0.9rem' }}>Binary file — no preview available</span>
+            <span className="muted" style={{ fontSize: '0.9rem' }}>{t('preview.binary')}</span>
           </div>
         )}
       </div>

@@ -5,5 +5,6 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: { '@shared': new URL('../../shared', import.meta.url).pathname },
+    dedupe: ['i18next', 'react-i18next'],
   },
 })

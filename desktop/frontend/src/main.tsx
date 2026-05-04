@@ -1,4 +1,5 @@
-import React from 'react'
+import './i18n'
+import React, { Suspense } from 'react'
 import {createRoot} from 'react-dom/client'
 import '@shared/styles.css'
 import './App.css'
@@ -10,6 +11,8 @@ const root = createRoot(container!)
 
 root.render(
     <React.StrictMode>
-        <App/>
+        <Suspense fallback={null}>
+            <App/>
+        </Suspense>
     </React.StrictMode>
 )

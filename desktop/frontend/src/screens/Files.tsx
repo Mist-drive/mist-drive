@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConfirm } from '../components/ConfirmDialog'
+import { useTranslation } from '@shared/lib/i18n'
 import { fmt } from '@shared/lib/format'
 import { startLoading, endLoading } from '@shared/lib/loading'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
@@ -37,6 +38,7 @@ type Props = { onQuotaChange?: () => void; user: apiclient.PublicUser }
 // actual HTTP / multipart work happens in Go via Wails bindings — the
 // JWT never leaves the Go side.
 export default function Files({ onQuotaChange, user }: Props) {
+  const { t } = useTranslation()
   const [files, setFiles] = useState<apiclient.ObjectInfo[]>([])
   const [processing, setProcessing] = useState<string[]>([])
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -80,7 +82,7 @@ export default function Files({ onQuotaChange, user }: Props) {
     }).catch(() => {})
     const unsubChange = EventsOn('files-changed', () => { refresh(); onQuotaChange?.() })
     const unsubErr = EventsOn('rename-error', (message: string, path: string) => {
-      setRenameErr(`Rename failed for "${path}": ${message}`)
+      setRenameErr(t('files.renameError', { path, message }))
       refresh()
     })
     const unsubProgress = EventsOn('upload-progress', (ev: { key: string; loaded: number; total: number; done: boolean }) => {
@@ -126,7 +128,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   }
 
   const onUpload = async () => {
-    const picked = await withBusy('Picking file …', () => PickFile(''))
+    const picked = await withBusy(t('status.picking'), () => PickFile(''))
     if (!picked?.key) return
     const existing = files.find(f => f.key === picked.key)
     if (existing) {
@@ -139,13 +141,13 @@ export default function Files({ onQuotaChange, user }: Props) {
       if (choice === 'diff' && conflict.existingSize === conflict.incomingSize) return
     }
     cancelledKeysRef.current.clear(); uploadTotalRef.current = 1; setUploadDone(0)
-    await withBusy('Uploading …', () => UploadPicked(picked.key))
+    await withBusy(t('status.uploading'), () => UploadPicked(picked.key))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
   const onUploadFolder = async () => {
-    const picked = await withBusy('Picking folder …', () => PickFolderForUpload(''))
+    const picked = await withBusy(t('status.pickingFolder'), () => PickFolderForUpload(''))
     if (!picked || picked.length === 0) return
     const existingMap = new Map(files.map(f => [f.key, f.size]))
     const conflicts: ConflictEntry[] = picked
@@ -163,40 +165,39 @@ export default function Files({ onQuotaChange, user }: Props) {
       }
     }
     cancelledKeysRef.current.clear(); uploadTotalRef.current = picked.length - skipKeys.length; setUploadDone(0)
-    await withBusy('Uploading folder …', () => UploadFolderPicked(skipKeys))
+    await withBusy(t('status.uploadingFolder'), () => UploadFolderPicked(skipKeys))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
 
   const onDownload = async (key: string) => {
-    const dest = await withBusy('Downloading …', () => DownloadFile(key))
-    if (dest) setBusy(`Saved to ${dest}`)
-    // Leave the "saved to" message visible briefly.
+    const dest = await withBusy(t('status.downloading'), () => DownloadFile(key))
+    if (dest) setBusy(t('status.savedTo', { path: dest }))
     setTimeout(() => setBusy(null), 2500)
   }
   const onDelete = async (key: string) => {
-    const ok = await confirm({ title: 'Delete file', message: `Delete ${key}? This cannot be undone.`, confirmText: 'Delete', danger: true })
+    const ok = await confirm({ title: t('files.deleteTitle'), message: t('files.deleteConfirm', { key }), confirmText: t('files.delete'), danger: true })
     if (!ok) return
-    await withBusy('Deleting …', () => DeleteFile(key))
+    await withBusy(t('status.deleting'), () => DeleteFile(key))
     await refresh()
     onQuotaChange?.()
   }
   const onDeleteFolder = async (path: string) => {
-    const ok = await confirm({ title: 'Delete folder', message: `Delete ${path}/ and everything inside? This cannot be undone.`, confirmText: 'Delete', danger: true })
+    const ok = await confirm({ title: t('files.deleteFolderTitle'), message: t('files.deleteFolderConfirm', { path }), confirmText: t('files.delete'), danger: true })
     if (!ok) return
-    await withBusy('Deleting folder …', () => DeleteFolder(path))
+    await withBusy(t('status.deletingFolder'), () => DeleteFolder(path))
     await refresh()
     onQuotaChange?.()
   }
   const onDownloadFolder = async (path: string) => {
-    const dest = await withBusy('Downloading folder …', () => DownloadFolder(path + '/'))
-    if (dest) setBusy(`Saved to ${dest}`)
+    const dest = await withBusy(t('status.downloadingFolder'), () => DownloadFolder(path + '/'))
+    if (dest) setBusy(t('status.savedTo', { path: dest }))
     setTimeout(() => setBusy(null), 2500)
   }
   const onMkdir = async () => {
     if (!newFolder?.trim()) return
-    await withBusy('Creating folder …', () => CreateFolder(newFolder.trim()))
+    await withBusy(t('status.creatingFolder'), () => CreateFolder(newFolder.trim()))
     setNewFolder(null)
     await refresh()
   }
@@ -216,7 +217,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   }
 
   const onRefresh = async () => {
-    await withBusy('Refreshing …', () => RecomputeUsage())
+    await withBusy(t('status.refreshing'), () => RecomputeUsage())
     onQuotaChange?.()
   }
 
@@ -294,9 +295,9 @@ export default function Files({ onQuotaChange, user }: Props) {
           {busy && <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>{busy}</p>}
         </div>
         <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
-          <button className="ghost" onClick={() => setNewFolder('')} disabled={!!busy}>New folder</button>
-          <button className="ghost" onClick={onUpload} disabled={!!busy}>Upload file</button>
-          <button className="ghost" onClick={onUploadFolder} disabled={!!busy}>Upload folder</button>
+          <button className="ghost" onClick={() => setNewFolder('')} disabled={!!busy}>{t('files.newFolder')}</button>
+          <button className="ghost" onClick={onUpload} disabled={!!busy}>{t('files.uploadFile')}</button>
+          <button className="ghost" onClick={onUploadFolder} disabled={!!busy}>{t('files.uploadFolder')}</button>
         </div>
       </div>
       <UploadCard
@@ -309,7 +310,7 @@ export default function Files({ onQuotaChange, user }: Props) {
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
-          placeholder="Search files…"
+          placeholder={t('files.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1 }}
@@ -325,7 +326,7 @@ export default function Files({ onQuotaChange, user }: Props) {
           <input
             autoFocus
             type="text"
-            placeholder="folder/path"
+            placeholder={t('files.newFolderPlaceholder')}
             value={newFolder}
             onChange={(e) => setNewFolder(e.target.value)}
             onKeyDown={(e) => {
@@ -334,34 +335,29 @@ export default function Files({ onQuotaChange, user }: Props) {
             }}
             style={{ flex: 1 }}
           />
-          <button onClick={onMkdir} disabled={!newFolder.trim()}>Create</button>
-          <button className="ghost" onClick={() => setNewFolder(null)}>Cancel</button>
+          <button onClick={onMkdir} disabled={!newFolder.trim()}>{t('files.create')}</button>
+          <button className="ghost" onClick={() => setNewFolder(null)}>{t('files.cancel')}</button>
         </div>
       )}
       <table>
         <thead>
           <tr>
             <th>
-              Name
-              {/* Collapse-all lives in the header so it's discoverable
-                  without a menu. Intentionally no "expand all" — a
-                  blind expand on a large bucket would render thousands
-                  of rows, whereas collapsing is cheap and is the bulk
-                  action users actually want. */}
+              {t('files.name')}
               <button
                 className="ghost"
-                title="Collapse all folders"
+                title={t('files.collapseAll')}
                 onClick={() => setExpanded({})}
                 style={{ padding: '.1rem .4rem', marginLeft: '.5rem', fontSize: '0.8rem', lineHeight: 1 }}
               >⊟</button>
             </th>
-            <th>Size</th>
-            <th>Modified</th>
+            <th>{t('files.size')}</th>
+            <th>{t('files.modified')}</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview)}
+          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, t)}
         </tbody>
       </table>
       <StorageStats
@@ -370,7 +366,7 @@ export default function Files({ onQuotaChange, user }: Props) {
         totalFiles={totalFiles}
         totalFolders={totalFolders}
         onRefresh={onRefresh}
-        refreshing={busy === 'Refreshing …'}
+        refreshing={busy === t('status.refreshing')}
       />
     </div>
     {replaceConflicts.length > 0 && (
@@ -417,6 +413,7 @@ function renderTree(
   onCommitRename: (oldPath: string) => void,
   isSyncRoot: (path: string) => boolean,
   onPreview: (k: string) => void,
+  t: ReturnType<typeof useTranslation>['t'],
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
@@ -450,15 +447,15 @@ function renderTree(
       const disabledStyle = { opacity: 0.35, cursor: 'not-allowed' as const, pointerEvents: 'none' as const }
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-          <button className="ghost" title={syncRoot ? 'Sync root — cannot rename' : 'Rename'} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
+          <button className="ghost" title={syncRoot ? t('files.syncRootRename') : t('files.rename')} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
             onClick={(e) => { e.stopPropagation(); if (!syncRoot) { setEditingPath(c.path); setEditingValue(c.name) } }}>✏️</button>
-          <button className="ghost" title="Download as zip" style={iconBtn}
+          <button className="ghost" title={t('files.downloadZip')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>⬇</button>
-          <button className="danger" title={syncRoot ? 'Sync root — cannot delete' : 'Delete'} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
+          <button className="danger" title={syncRoot ? t('files.syncRootDelete') : t('files.delete')} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
             onClick={(e) => { e.stopPropagation(); if (!syncRoot) onDeleteFolder(c.path) }}>✕</button>
         </div>
       )
@@ -478,7 +475,7 @@ function renderTree(
         </tr>,
       )
       if (open) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, t))
       }
     } else {
       const nameCell = editing ? (
@@ -498,15 +495,15 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-          <button className="ghost" title="Rename" style={iconBtn}
+          <button className="ghost" title={t('files.rename')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
-          <button className="ghost" title="Download" style={iconBtn}
+          <button className="ghost" title={t('files.download')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
-          <button className="danger" title="Delete" style={iconBtn}
+          <button className="danger" title={t('files.delete')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
         </div>
       )

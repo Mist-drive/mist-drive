@@ -5,6 +5,7 @@ import { apiclient } from '../../wailsjs/go/models'
 import Logo from '@shared/components/Logo'
 import Files from './Files'
 import SyncPanel from './Sync'
+import { useTranslation } from '@shared/lib/i18n'
 
 type Props = {
   user: apiclient.PublicUser
@@ -15,6 +16,7 @@ type Props = {
 type Tab = 'files' | 'sync'
 
 export default function Home({ user: initial, features, onLogout }: Props) {
+  const { t } = useTranslation()
   const [user, setUser] = useState(initial)
   const [tab, setTab] = useState<Tab>('files')
   const [version, setVersion] = useState('')
@@ -43,12 +45,12 @@ export default function Home({ user: initial, features, onLogout }: Props) {
     <div className="home">
       <div className="navbar">
         <Logo version={version || undefined} />
-        <button style={tabStyle('files')} onClick={() => setTab('files')}>Files</button>
-        <button style={tabStyle('sync')} onClick={() => setTab('sync')}>Sync</button>
-        <button style={tabStyle('files')} onClick={() => OpenWebApp()}>Web ↗</button>
+        <button style={tabStyle('files')} onClick={() => setTab('files')}>{t('desktop.filesTab')}</button>
+        <button style={tabStyle('sync')} onClick={() => setTab('sync')}>{t('desktop.syncTab')}</button>
+        <button style={tabStyle('files')} onClick={() => OpenWebApp()}>{t('desktop.openWeb')}</button>
         <div className="spacer" />
         <span className="muted">{user.login}</span>
-        <button className="ghost" onClick={onLogout}>Logout</button>
+        <button className="ghost" onClick={onLogout}>{t('nav.logout')}</button>
       </div>
       <div className="layout">
         {tab === 'files' && <Files onQuotaChange={refreshQuota} user={user} />}

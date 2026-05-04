@@ -9,6 +9,7 @@ import UploadCard from '@shared/components/UploadCard'
 import { fmt } from '@shared/lib/format'
 import { type UploadEntry } from '@shared/lib/upload'
 import { TreeNode, buildTree, sortedChildren } from '@shared/lib/tree'
+import { useTranslation } from '@shared/lib/i18n'
 
 // webkitdirectory isn't in the default React HTMLInputAttributes type
 declare module 'react' {
@@ -39,6 +40,7 @@ type DragHandlers = {
 }
 
 export default function Files() {
+  const { t } = useTranslation()
   const [files, setFiles] = useState<ObjectInfo[]>([])
   const [processing, setProcessing] = useState<string[]>([])
   const [me, setMe] = useState<PublicUser | null>(getUser())
@@ -89,7 +91,7 @@ export default function Files() {
 
   const uploading = Object.keys(active).length > 0 || queued > 0
   const isBusy = !!busy || uploading
-  const statusText = busy ?? (uploading ? 'Uploading …' : null)
+  const statusText = busy ?? (uploading ? t('status.uploading') : null)
 
   const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
     setBusy(label); setErr(null)
@@ -119,7 +121,7 @@ export default function Files() {
   useEffect(() => {
     return onEvent((e) => {
       if (e.type === 'rename-error') {
-        setRenameErr(`Rename failed for "${e.path}": ${e.message}`)
+        setRenameErr(t('files.renameError', { path: e.path, message: e.message }))
         refresh()
       } else {
         refresh()
@@ -128,7 +130,7 @@ export default function Files() {
   }, [])
 
   const onRefresh = async () => {
-    await withBusy('Refreshing …', async () => { await api.recomputeUsage(); await refresh() })
+    await withBusy(t('status.refreshing'), async () => { await api.recomputeUsage(); await refresh() })
   }
 
   const runOne = async (key: string, file: File) => {
@@ -154,7 +156,7 @@ export default function Files() {
         if (typeof err?.message === 'string' && err.message.startsWith('413')) {
           quotaHit.current = true
           for (const c of controllers.current.values()) c.abort()
-          setErr('Quota exceeded — remaining uploads cancelled.')
+          setErr(t('files.quotaExceeded'))
         }
       }
     } finally {
@@ -163,7 +165,7 @@ export default function Files() {
     }
   }
 
-  const runUploadJobs = async (jobs: { key: string; file: File }[], label = 'Uploading …') => {
+  const runUploadJobs = async (jobs: { key: string; file: File }[], label = t('status.uploading')) => {
     if (jobs.length === 0) return
     setQueued(q => q + jobs.length)
 
@@ -220,36 +222,36 @@ export default function Files() {
       key: (f as any).webkitRelativePath || f.name,
       file: f,
     }))
-    await runUploadJobs(jobs, isFolder ? 'Uploading folder …' : 'Uploading …')
+    await runUploadJobs(jobs, isFolder ? t('status.uploadingFolder') : t('status.uploading'))
     if (fileInput.current) fileInput.current.value = ''
     if (folderInput.current) folderInput.current.value = ''
   }
 
   const onDownload = async (key: string) => {
-    await withBusy('Downloading …', async () => {
+    await withBusy(t('status.downloading'), async () => {
       const { url } = await api.download(key)
       window.location.href = url
     })
   }
   const onDelete = async (key: string) => {
     const ok = await confirm({
-      title: 'Delete file',
-      message: `Delete ${key}? This cannot be undone.`,
-      confirmText: 'Delete',
+      title: t('files.deleteTitle'),
+      message: t('files.deleteConfirm', { key }),
+      confirmText: t('files.delete'),
       danger: true,
     })
     if (!ok) return
-    await withBusy('Deleting …', async () => { await api.deleteFile(key); await refresh() })
+    await withBusy(t('status.deleting'), async () => { await api.deleteFile(key); await refresh() })
   }
   const onDeleteFolder = async (path: string) => {
     const ok = await confirm({
-      title: 'Delete folder',
-      message: `Delete ${path}/ and everything inside it? This cannot be undone.`,
-      confirmText: 'Delete',
+      title: t('files.deleteFolderTitle'),
+      message: t('files.deleteFolderConfirm', { path }),
+      confirmText: t('files.delete'),
       danger: true,
     })
     if (!ok) return
-    await withBusy('Deleting …', async () => { await api.deleteFolder(path + '/'); await refresh() })
+    await withBusy(t('status.deleting'), async () => { await api.deleteFolder(path + '/'); await refresh() })
   }
   const onDownloadFolder = (path: string) => {
     window.location.href = api.downloadZipUrl(path + '/')
@@ -257,7 +259,7 @@ export default function Files() {
 
   const onMkdir = async () => {
     if (!newFolder?.trim()) return
-    await withBusy('Creating …', async () => {
+    await withBusy(t('status.creating'), async () => {
       await api.mkdir(newFolder.trim())
       setNewFolder(null)
       await refresh()
@@ -317,7 +319,7 @@ export default function Files() {
 
     await Promise.all(entries.map(entry => processEntry(entry, prefix)))
 
-    await runUploadJobs(jobs, hasFolder ? 'Uploading folder …' : 'Uploading …')
+    await runUploadJobs(jobs, hasFolder ? t('status.uploadingFolder') : t('status.uploading'))
   }
 
   const activeList = Object.values(active)
@@ -383,7 +385,7 @@ export default function Files() {
     if (!newName) return
     const oldName = oldPath.split('/').pop() ?? oldPath
     if (newName === oldName) return
-    await withBusy('Renaming …', async () => { await api.rename(oldPath, newName); await refresh() })
+    await withBusy(t('status.renaming'), async () => { await api.rename(oldPath, newName); await refresh() })
   }
 
   return (
@@ -411,15 +413,15 @@ export default function Files() {
           {statusText && <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>{statusText}</p>}
         </div>
         <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
-          <button type="button" className="ghost" disabled={isBusy} onClick={() => setNewFolder('')}>New folder</button>
-          <button type="button" className="ghost" disabled={isBusy} onClick={() => fileInput.current?.click()}>Upload files</button>
-          <button type="button" className="ghost" disabled={isBusy} onClick={() => folderInput.current?.click()}>Upload folder</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => setNewFolder('')}>{t('files.newFolder')}</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => fileInput.current?.click()}>{t('files.uploadFiles')}</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => folderInput.current?.click()}>{t('files.uploadFolder')}</button>
         </div>
       </div>
       <div className="row" style={{ marginBottom: '.6rem' }}>
         <input
           type="search"
-          placeholder="Search files…"
+          placeholder={t('files.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1 }}
@@ -435,7 +437,7 @@ export default function Files() {
           <input
             autoFocus
             type="text"
-            placeholder="folder/path"
+            placeholder={t('files.newFolderPlaceholder')}
             value={newFolder}
             onChange={(e) => setNewFolder(e.target.value)}
             onKeyDown={(e) => {
@@ -444,8 +446,8 @@ export default function Files() {
             }}
             style={{ flex: 1 }}
           />
-          <button type="button" onClick={onMkdir} disabled={!newFolder.trim()}>Create</button>
-          <button type="button" className="ghost" onClick={() => setNewFolder(null)}>Cancel</button>
+          <button type="button" onClick={onMkdir} disabled={!newFolder.trim()}>{t('files.create')}</button>
+          <button type="button" className="ghost" onClick={() => setNewFolder(null)}>{t('files.cancel')}</button>
         </div>
       )}
       <div
@@ -457,21 +459,21 @@ export default function Files() {
         <table onDragEnter={() => setDragOverFolder(null)}>
           <thead><tr>
             <th>
-              Name
+              {t('files.name')}
               <button
                 type="button"
                 className="ghost"
-                title="Collapse all folders"
+                title={t('files.collapseAll')}
                 onClick={() => setExpanded({})}
                 style={{ padding: '.1rem .4rem', marginLeft: '.5rem', fontSize: '0.8rem', lineHeight: 1 }}
               >⊟</button>
             </th>
-            <th>Size</th>
-            <th>Modified</th>
+            <th>{t('files.size')}</th>
+            <th>{t('files.modified')}</th>
             <th></th>
           </tr></thead>
           <tbody>
-            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview)}
+            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, t)}
           </tbody>
         </table>
       </div>
@@ -482,7 +484,7 @@ export default function Files() {
           totalFiles={totalFiles}
           totalFolders={totalFolders}
           onRefresh={onRefresh}
-          refreshing={busy === 'Refreshing …'}
+          refreshing={busy === t('status.refreshing')}
         />
       )}
     </div>
@@ -525,6 +527,7 @@ function renderTree(
   setEditingValue: (v: string) => void,
   onCommitRename: (oldPath: string) => void,
   onPreview: (k: string) => void,
+  t: ReturnType<typeof useTranslation>['t'],
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
   for (const c of sortedChildren(node)) {
@@ -556,15 +559,15 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-          <button className="ghost" title="Rename" style={iconBtn}
+          <button className="ghost" title={t('files.rename')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
-          <button className="ghost" title="Download as zip" style={iconBtn}
+          <button className="ghost" title={t('files.downloadZip')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>⬇</button>
-          <button className="danger" title="Delete" style={iconBtn}
+          <button className="danger" title={t('files.delete')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDeleteFolder(c.path) }}>✕</button>
         </div>
       )
@@ -590,7 +593,7 @@ function renderTree(
         </tr>,
       )
       if (isOpen) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, t))
       }
     } else {
       const nameCell = editing ? (
@@ -610,15 +613,15 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-          <button className="ghost" title="Rename" style={iconBtn}
+          <button className="ghost" title={t('files.rename')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
-          <button className="ghost" title="Download" style={iconBtn}
+          <button className="ghost" title={t('files.download')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
-          <button className="danger" title="Delete" style={iconBtn}
+          <button className="danger" title={t('files.delete')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
         </div>
       )

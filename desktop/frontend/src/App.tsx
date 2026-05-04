@@ -7,6 +7,7 @@ import { startLoading, endLoading } from '@shared/lib/loading'
 import { onSessionExpired } from './session'
 import LoginScreen from './screens/Login'
 import Home from './screens/Home'
+import { useTranslation } from '@shared/lib/i18n'
 
 // Boot flow: we have a stored JWT in settings.json ⇒ try Me().
 // If it succeeds, land on Home; otherwise show the Login screen.
@@ -26,7 +27,8 @@ export default function App() {
       .finally(() => { endLoading(); setChecked(true) })
   }, [])
 
-  if (!checked) return <div className="boot">Loading…</div>
+  const { t } = useTranslation()
+  if (!checked) return <div className="boot">{t('desktop.loading')}</div>
 
   return (
     <ConfirmProvider>

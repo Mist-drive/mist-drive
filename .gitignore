@@ -2,8 +2,12 @@ api/bin
 api/tmp
 api/.env
 web/node_modules
-shared/node_modules
 web/dist
+web/tsconfig.tsbuildinfo
+shared/node_modules
+desktop/frontend/node_modules
+desktop/frontend/dist
+desktop/frontend/package.json.md5
 .env
 data
 traefik/certs

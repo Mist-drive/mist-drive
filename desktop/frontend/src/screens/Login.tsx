@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { GetSettings, GetVersion, ListEnvironments } from '../../wailsjs/go/main/App'
 import LoginCard from '@shared/components/LoginCard'
+import { useTranslation } from '@shared/lib/i18n'
 
 type Props = {
   onLogin: (apiURL: string, login: string, password: string, rememberLogin: boolean) => Promise<void>
 }
 
 export default function Login({ onLogin }: Props) {
+  const { t } = useTranslation()
   const [apiURL, setApiURL] = useState('http://localhost:3000')
   const [envs, setEnvs] = useState<string[]>([])
   const [custom, setCustom] = useState(false)
@@ -57,7 +59,7 @@ export default function Login({ onLogin }: Props) {
       {envs.map((url) => (
         <option key={url} value={url}>{url}</option>
       ))}
-      <option value="__custom__">Custom…</option>
+      <option value="__custom__">{t('desktop.customServer')}</option>
     </select>
   ) : (
     <div style={{ position: 'relative' }}>
@@ -65,13 +67,13 @@ export default function Login({ onLogin }: Props) {
         value={apiURL}
         onChange={(e) => setApiURL(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Escape' && envs.length > 0) { setCustom(false); setApiURL(envs[0]) } }}
-        placeholder="https://drive.example.com"
+        placeholder={t('desktop.serverPlaceholder')}
         autoFocus
       />
       {envs.length > 0 && (
         <button type="button" className="back-link"
           onClick={() => { setCustom(false); setApiURL(envs[0]) }}>
-          Back to list
+          {t('desktop.backToList')}
         </button>
       )}
     </div>

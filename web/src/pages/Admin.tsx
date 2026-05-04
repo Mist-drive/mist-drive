@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, PublicUser } from '../lib/api'
 import { useConfirm } from '../components/ConfirmDialog'
+import { useTranslation } from '@shared/lib/i18n'
 
 const GiB = 1024 * 1024 * 1024
 function fmt(n: number) {
@@ -8,6 +9,7 @@ function fmt(n: number) {
 }
 
 export default function Admin() {
+  const { t } = useTranslation()
   const [users, setUsers] = useState<PublicUser[]>([])
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
@@ -38,11 +40,9 @@ export default function Admin() {
 
   const remove = async (u: PublicUser) => {
     const ok = await confirm({
-      title: `Delete user ${u.login}`,
-      message:
-        `This will permanently delete user "${u.login}" and their entire bucket ` +
-        `(${fmt(u.usedBytes)} of data). This cannot be undone.`,
-      confirmText: 'Delete user',
+      title: t('admin.deleteUserTitle', { login: u.login }),
+      message: t('admin.deleteUserConfirm', { login: u.login, size: fmt(u.usedBytes) }),
+      confirmText: t('admin.deleteUserConfirmText'),
       danger: true,
     })
     if (!ok) return
@@ -53,17 +53,17 @@ export default function Admin() {
   return (
     <div>
       <form className="card" onSubmit={create}>
-        <h3>Create user</h3>
+        <h3>{t('admin.createUser')}</h3>
         <div className="row">
-          <input placeholder="login" value={login} onChange={e => setLogin(e.target.value)} />
-          <input placeholder="password" type="password" value={password} onChange={e => setPassword(e.target.value)} />
-          <input placeholder="quota GiB" type="number" value={quotaGiB} onChange={e => setQuotaGiB(parseInt(e.target.value) || 0)} />
-          <button>Create</button>
+          <input placeholder={t('admin.loginPlaceholder')} value={login} onChange={e => setLogin(e.target.value)} />
+          <input placeholder={t('admin.passwordPlaceholder')} type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          <input placeholder={t('admin.quotaPlaceholder')} type="number" value={quotaGiB} onChange={e => setQuotaGiB(parseInt(e.target.value) || 0)} />
+          <button>{t('admin.create')}</button>
         </div>
       </form>
       {err && <p style={{ color: 'salmon' }}>{err}</p>}
       <table>
-        <thead><tr><th>Login</th><th>Role</th><th>Used / Quota</th><th>Quota (GiB)</th><th></th></tr></thead>
+        <thead><tr><th>{t('admin.loginLabel')}</th><th>{t('admin.role')}</th><th>{t('admin.usedQuota')}</th><th>{t('admin.quotaGib')}</th><th></th></tr></thead>
         <tbody>
           {users.map(u => (
             <tr key={u.id}>
@@ -74,7 +74,7 @@ export default function Admin() {
                 <input type="number" defaultValue={Math.round(u.quotaBytes / GiB)}
                   onBlur={e => changeQuota(u.id, parseInt(e.target.value) || 0)} />
               </td>
-              <td>{u.role !== 'admin' && <button className="danger" onClick={() => remove(u)}>Delete</button>}</td>
+              <td>{u.role !== 'admin' && <button className="danger" onClick={() => remove(u)}>{t('admin.delete')}</button>}</td>
             </tr>
           ))}
         </tbody>

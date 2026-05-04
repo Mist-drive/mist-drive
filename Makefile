@@ -13,7 +13,7 @@ install: ## install deps for api + web + desktop
 	cd desktop && go mod download && cd frontend && bun install
 
 install-data:
-	mkdir -p data/api data/minio data/logs
+	mkdir -p data/api data/minio data/api/logs
 
 build: ## build api + web + desktop
 	cd api && CGO_ENABLED=0 go build -ldflags "-X main.Version=$(VERSION)" -o bin/api ./cmd/server
@@ -24,8 +24,10 @@ api-dev: install-data ## run api with air hot-reload (starts minio via docker co
 	@[ -f api/.env ] || (touch api/.env && echo "created api/.env")
 	@grep -q "^JWT_SECRET=" api/.env || (echo "JWT_SECRET=$$(openssl rand -base64 48)" >> api/.env && echo "appended JWT_SECRET to api/.env")
 	@grep -q "^ADMIN_PASSWORD=" api/.env || (echo "ADMIN_PASSWORD=admin" >> api/.env && echo "appended ADMIN_PASSWORD=admin to api/.env")
+	@grep -q "^DATA_DIR=" api/.env || echo "DATA_DIR=../data/api" >> api/.env
+	@grep -q "^LOG_PATH=" api/.env || echo "LOG_PATH=../data/api/logs/app.log" >> api/.env
 	docker compose up -d --wait minio
-	cd api && set -a && . ./.env && set +a && DATA_DIR=../data/api LOG_PATH=../data/logs/app.log air || go run ./cmd/server
+	cd api && set -a && . ./.env && set +a && air || go run ./cmd/server
 
 ui-dev: ## run web vite dev server
 	cd web && bun run dev

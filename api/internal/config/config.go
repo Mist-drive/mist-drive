@@ -8,24 +8,24 @@ import (
 )
 
 type Config struct {
-	Port             string
-	JWTSecret        string
-	JWTTTL           time.Duration
-	AdminLogin       string
-	AdminPassword    string
-	DataDir          string
-	S3Endpoint       string
-	S3AccessKey      string
-	S3SecretKey      string
-	S3UseSSL         bool
-	PublicS3Host     string // host clients use for presigned URLs
-	UploadTTL        time.Duration
-	DefaultQuota     int64
-	LogLevel         string
-	LogPath          string
-	ServiceName      string
-	PresignDownload  time.Duration
-	MaxZipBytes      int64
+	Port            string
+	JWTSecret       string
+	JWTTTL          time.Duration
+	AdminLogin      string
+	AdminPassword   string
+	DataDir         string
+	S3Endpoint      string
+	S3AccessKey     string
+	S3SecretKey     string
+	S3UseSSL        bool
+	PublicS3Host    string // host clients use for presigned URLs
+	UploadTTL       time.Duration
+	DefaultQuota    int64
+	LogLevel        string
+	LogPath         string
+	ServiceName     string
+	PresignDownload time.Duration
+	MaxZipBytes     int64
 }
 
 // minJWTSecretLen is the shortest JWT secret we accept.
@@ -44,7 +44,7 @@ func Load() *Config {
 		JWTTTL:          duration("JWT_TTL", 24*time.Hour),
 		AdminLogin:      env("ADMIN_LOGIN", "admin"),
 		AdminPassword:   must("ADMIN_PASSWORD"),
-		DataDir:         env("DATA_DIR", "./data/api"),
+		DataDir:         env("DATA_DIR", "./data"),
 		S3Endpoint:      env("S3_ENDPOINT", "localhost:9000"),
 		S3AccessKey:     env("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:     env("S3_SECRET_KEY", "minioadmin"),
@@ -53,7 +53,7 @@ func Load() *Config {
 		UploadTTL:       time.Duration(intEnv("UPLOAD_TTL_HOURS", 6)) * time.Hour,
 		DefaultQuota:    int64(intEnv("DEFAULT_QUOTA_BYTES", 10*1024*1024*1024)),
 		LogLevel:        env("LOG_LEVEL", "info"),
-		LogPath:         env("LOG_PATH", "./data/logs/app.log"),
+		LogPath:         env("LOG_PATH", "./logs/app.log"),
 		ServiceName:     env("SERVICE_NAME", "mist-drive-api"),
 		PresignDownload: duration("PRESIGN_DOWNLOAD_TTL", 5*time.Minute),
 		MaxZipBytes:     int64(intEnv("MAX_ZIP_BYTES", 20*1024*1024*1024)), // 20 GiB

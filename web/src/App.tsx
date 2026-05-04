@@ -7,6 +7,7 @@ import Logo from '@shared/components/Logo'
 import Login from './pages/Login'
 import Files from './pages/Files'
 import Admin from './pages/Admin'
+import { useTranslation } from '@shared/lib/i18n'
 
 function Background() {
   return (
@@ -19,6 +20,7 @@ function Background() {
 }
 
 function Nav({ version }: { version: string }) {
+  const { t } = useTranslation()
   const u = getUser()
   const nav = useNavigate()
   const loc = useLocation()
@@ -27,13 +29,13 @@ function Nav({ version }: { version: string }) {
   return (
     <div className="navbar">
       <Logo version={version || undefined} />
-      <a href="/files" style={loc.pathname.startsWith('/files') ? activeStyle : undefined}>Files</a>
+      <a href="/files" style={loc.pathname.startsWith('/files') ? activeStyle : undefined}>{t('nav.files')}</a>
       {u.role === 'admin' && (
-        <a href="/admin" style={loc.pathname.startsWith('/admin') ? activeStyle : undefined}>Admin</a>
+        <a href="/admin" style={loc.pathname.startsWith('/admin') ? activeStyle : undefined}>{t('nav.admin')}</a>
       )}
       <div className="spacer" />
       <span className="muted">{u.login}</span>
-      <button className="ghost" onClick={() => { clearSession(); nav('/login') }}>Logout</button>
+      <button className="ghost" onClick={() => { clearSession(); nav('/login') }}>{t('nav.logout')}</button>
     </div>
   )
 }

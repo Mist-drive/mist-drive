@@ -1,4 +1,5 @@
-import React from 'react'
+import './i18n'
+import React, { Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
@@ -35,9 +36,11 @@ if (location.hash.startsWith('#token=')) {
 function bootReact() {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <Suspense fallback={null}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </Suspense>
     </React.StrictMode>,
   )
 }

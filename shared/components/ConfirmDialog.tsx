@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useTranslation } from '@shared/lib/i18n'
 
 // A single reusable modal confirm dialog. Exposed via useConfirm(),
 // which returns a promise-based function so callers can write:
@@ -28,6 +29,7 @@ export function useConfirm() {
 }
 
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
   const [pending, setPending] = useState<Pending | null>(null)
   const confirmBtn = useRef<HTMLButtonElement>(null)
 
@@ -76,14 +78,14 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
             <p className="modal-message">{pending.message}</p>
             <div className="modal-actions">
               <button className="ghost" onClick={() => close(false)}>
-                {pending.cancelText ?? 'Cancel'}
+                {pending.cancelText ?? t('confirm.cancel')}
               </button>
               <button
                 ref={confirmBtn}
                 className={pending.danger ? 'danger' : ''}
                 onClick={() => close(true)}
               >
-                {pending.confirmText ?? 'Confirm'}
+                {pending.confirmText ?? t('confirm.confirm')}
               </button>
             </div>
           </div>

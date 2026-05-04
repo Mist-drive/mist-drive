@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from '@shared/lib/i18n'
 import {
   AddSyncFolder,
   GetSettings,
@@ -18,6 +19,7 @@ import { settings, sync } from '../../wailsjs/go/models'
 // runtime.EventsEmit but a simple poll is one API call and doesn't
 // require any subscription lifecycle).
 export default function SyncPanel() {
+  const { t } = useTranslation()
   const [s, setS] = useState<settings.Settings | null>(null)
   const [status, setStatus] = useState<sync.Status | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -51,7 +53,7 @@ export default function SyncPanel() {
     }
   }
   const onRemove = async (i: number) => {
-    if (!confirm('Remove this sync folder? Local files are kept on disk.')) return
+    if (!confirm(t('sync.removeFolderConfirm'))) return
     await RemoveSyncFolder(i)
     await refreshSettings()
   }
@@ -65,9 +67,9 @@ export default function SyncPanel() {
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <h3 style={{ margin: 0 }}>Sync</h3>
+        <h3 style={{ margin: 0 }}>{t('sync.title')}</h3>
         <button className="ghost" onClick={openHistory} style={{ padding: '.3rem .7rem', fontSize: '0.8rem' }}>
-          History
+          {t('sync.history')}
         </button>
       </div>
 
@@ -89,10 +91,10 @@ export default function SyncPanel() {
         letterSpacing: 1,
         color: 'var(--text-secondary)',
         marginBottom: '.5rem',
-      }}>Folders</h4>
+      }}>{t('sync.folders')}</h4>
       {s.folders.length === 0 && (
         <p className="muted" style={{ fontSize: '0.85rem', marginBottom: '.8rem' }}>
-          No sync folders yet. Add one below.
+          {t('sync.noFolders')}
         </p>
       )}
       {s.folders.map((f, i) => {
@@ -120,14 +122,14 @@ export default function SyncPanel() {
                 {f.local}
               </div>
               <div className="muted" style={{ fontSize: '0.78rem' }}>
-                ⇄ {f.remotePrefix || '(bucket root)'}
+                ⇄ {f.remotePrefix || t('sync.bucketRoot')}
               </div>
             </div>
             <div className="row" style={{ gap: '.4rem' }}>
               <button
                 className="ghost"
                 onClick={flipEnabled}
-                title={enabled ? 'Syncing — click to pause' : 'Paused — click to sync'}
+                title={enabled ? t('sync.syncingTooltip') : t('sync.pausedTooltip')}
                 style={{
                   padding: '.3rem .7rem',
                   fontSize: '0.8rem',
@@ -136,28 +138,28 @@ export default function SyncPanel() {
                   background: enabled ? 'var(--accent-green, #2ea043)' : 'var(--accent-red, #d14343)',
                   borderColor: enabled ? 'var(--accent-green, #2ea043)' : 'var(--accent-red, #d14343)',
                 }}
-              >Sync</button>
+              >{t('sync.title')}</button>
               <DirectionToggle
                 icon="↑"
-                tooltip={up ? 'Upload enabled — click to disable' : 'Upload disabled — click to enable'}
+                tooltip={up ? t('sync.uploadEnabled') : t('sync.uploadDisabled')}
                 active={up}
                 onClick={() => flip(!up, down)}
               />
               <DirectionToggle
                 icon="↓"
-                tooltip={down ? 'Download enabled — click to disable' : 'Download disabled — click to enable'}
+                tooltip={down ? t('sync.downloadEnabled') : t('sync.downloadDisabled')}
                 active={down}
                 onClick={() => flip(up, !down)}
               />
               <button className="danger" onClick={() => onRemove(i)}
-                style={{ padding: '.3rem .6rem' }}>Remove</button>
+                style={{ padding: '.3rem .6rem' }}>{t('sync.remove')}</button>
             </div>
           </div>
         )
       })}
 
       <div className="row" style={{ marginTop: '.8rem' }}>
-        <button className="ghost" onClick={onAdd}>Add folder…</button>
+        <button className="ghost" onClick={onAdd}>{t('sync.addFolder')}</button>
       </div>
 
       <h4 style={{
@@ -167,7 +169,7 @@ export default function SyncPanel() {
         color: 'var(--text-secondary)',
         marginTop: '1.5rem',
         marginBottom: '.5rem',
-      }}>Bandwidth</h4>
+      }}>{t('sync.bandwidth')}</h4>
       <BandwidthForm
         concurrent={s.maxConcurrentUploads}
         kbps={s.maxUploadRateKBps}
@@ -181,7 +183,7 @@ export default function SyncPanel() {
         color: 'var(--text-secondary)',
         marginTop: '1.5rem',
         marginBottom: '.5rem',
-      }}>Behavior</h4>
+      }}>{t('sync.behavior')}</h4>
       <label style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -203,7 +205,7 @@ export default function SyncPanel() {
           }}
           style={{ width: 'auto', margin: 0 }}
         />
-        Close to Tray
+        {t('sync.closeToTray')}
       </label>
     </div>
   )
@@ -244,6 +246,7 @@ function BandwidthForm({
   kbps: number
   onSave: (mc: number, kbps: number) => Promise<void>
 }) {
+  const { t } = useTranslation()
   const [mc, setMc] = useState(concurrent)
   const [kb, setKb] = useState(kbps)
   useEffect(() => { setMc(concurrent); setKb(kbps) }, [concurrent, kbps])
@@ -251,7 +254,7 @@ function BandwidthForm({
   return (
     <div className="row" style={{ gap: '.8rem', flexWrap: 'wrap' }}>
       <div style={{ flex: '1 1 180px' }}>
-        <label>Parallel uploads</label>
+        <label>{t('sync.parallelUploads')}</label>
         <input
           type="number"
           min={1}
@@ -260,7 +263,7 @@ function BandwidthForm({
         />
       </div>
       <div style={{ flex: '1 1 180px' }}>
-        <label>Max upload rate (KB/s, 0 = ∞)</label>
+        <label>{t('sync.maxUploadRate')}</label>
         <input
           type="number"
           min={0}
@@ -271,7 +274,7 @@ function BandwidthForm({
       <button
         style={{ alignSelf: 'flex-end' }}
         onClick={() => onSave(mc, kb)}
-      >Save</button>
+      >{t('sync.save')}</button>
     </div>
   )
 }
@@ -281,6 +284,7 @@ const actionIcon: Record<string, string> = {
 }
 
 function HistoryModal({ entries, onClose }: { entries: sync.LogEntry[]; onClose: () => void }) {
+  const { t } = useTranslation()
   return (
     <div
       onClick={onClose}
@@ -299,12 +303,12 @@ function HistoryModal({ entries, onClose }: { entries: sync.LogEntry[]; onClose:
         }}
       >
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h3 style={{ margin: 0 }}>Sync History</h3>
-          <button className="ghost" onClick={onClose} style={{ padding: '.3rem .6rem' }}>Close</button>
+          <h3 style={{ margin: 0 }}>{t('sync.historyTitle')}</h3>
+          <button className="ghost" onClick={onClose} style={{ padding: '.3rem .6rem' }}>{t('sync.close')}</button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
           {entries.length === 0 && (
-            <p className="muted" style={{ fontSize: '0.85rem' }}>No activity yet.</p>
+            <p className="muted" style={{ fontSize: '0.85rem' }}>{t('sync.noActivity')}</p>
           )}
           {entries.map((e, i) => {
             const t = e.time ? new Date(e.time).toLocaleTimeString() : ''
