@@ -126,7 +126,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   }
 
   const onUpload = async () => {
-    const picked = await withBusy('Picking file…', () => PickFile(''))
+    const picked = await withBusy('Picking file …', () => PickFile(''))
     if (!picked?.key) return
     const existing = files.find(f => f.key === picked.key)
     if (existing) {
@@ -139,13 +139,13 @@ export default function Files({ onQuotaChange, user }: Props) {
       if (choice === 'diff' && conflict.existingSize === conflict.incomingSize) return
     }
     cancelledKeysRef.current.clear(); uploadTotalRef.current = 1; setUploadDone(0)
-    await withBusy('Uploading…', () => UploadPicked(picked.key))
+    await withBusy('Uploading …', () => UploadPicked(picked.key))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
   const onUploadFolder = async () => {
-    const picked = await withBusy('Picking folder…', () => PickFolderForUpload(''))
+    const picked = await withBusy('Picking folder …', () => PickFolderForUpload(''))
     if (!picked || picked.length === 0) return
     const existingMap = new Map(files.map(f => [f.key, f.size]))
     const conflicts: ConflictEntry[] = picked
@@ -163,14 +163,14 @@ export default function Files({ onQuotaChange, user }: Props) {
       }
     }
     cancelledKeysRef.current.clear(); uploadTotalRef.current = picked.length - skipKeys.length; setUploadDone(0)
-    await withBusy('Uploading folder…', () => UploadFolderPicked(skipKeys))
+    await withBusy('Uploading folder …', () => UploadFolderPicked(skipKeys))
     setUploadActive({}); uploadTotalRef.current = 0; setUploadDone(0)
     await refresh()
     onQuotaChange?.()
   }
 
   const onDownload = async (key: string) => {
-    const dest = await withBusy('Downloading…', () => DownloadFile(key))
+    const dest = await withBusy('Downloading …', () => DownloadFile(key))
     if (dest) setBusy(`Saved to ${dest}`)
     // Leave the "saved to" message visible briefly.
     setTimeout(() => setBusy(null), 2500)
@@ -178,25 +178,25 @@ export default function Files({ onQuotaChange, user }: Props) {
   const onDelete = async (key: string) => {
     const ok = await confirm({ title: 'Delete file', message: `Delete ${key}? This cannot be undone.`, confirmText: 'Delete', danger: true })
     if (!ok) return
-    await withBusy('Deleting…', () => DeleteFile(key))
+    await withBusy('Deleting …', () => DeleteFile(key))
     await refresh()
     onQuotaChange?.()
   }
   const onDeleteFolder = async (path: string) => {
     const ok = await confirm({ title: 'Delete folder', message: `Delete ${path}/ and everything inside? This cannot be undone.`, confirmText: 'Delete', danger: true })
     if (!ok) return
-    await withBusy('Deleting folder…', () => DeleteFolder(path))
+    await withBusy('Deleting folder …', () => DeleteFolder(path))
     await refresh()
     onQuotaChange?.()
   }
   const onDownloadFolder = async (path: string) => {
-    const dest = await withBusy('Downloading folder…', () => DownloadFolder(path + '/'))
+    const dest = await withBusy('Downloading folder …', () => DownloadFolder(path + '/'))
     if (dest) setBusy(`Saved to ${dest}`)
     setTimeout(() => setBusy(null), 2500)
   }
   const onMkdir = async () => {
     if (!newFolder?.trim()) return
-    await withBusy('Creating folder…', () => CreateFolder(newFolder.trim()))
+    await withBusy('Creating folder …', () => CreateFolder(newFolder.trim()))
     setNewFolder(null)
     await refresh()
   }
@@ -216,7 +216,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   }
 
   const onRefresh = async () => {
-    await withBusy('Refreshing…', () => RecomputeUsage())
+    await withBusy('Refreshing …', () => RecomputeUsage())
     onQuotaChange?.()
   }
 
@@ -291,9 +291,9 @@ export default function Files({ onQuotaChange, user }: Props) {
         <div style={{ flex: 1 }}>
           {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
           {renameErr && <p className="error" style={{ margin: 0 }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
+          {busy && <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>{busy}</p>}
         </div>
         <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
-          {busy && <span className="muted">{busy}</span>}
           <button className="ghost" onClick={() => setNewFolder('')} disabled={!!busy}>New folder</button>
           <button className="ghost" onClick={onUpload} disabled={!!busy}>Upload file</button>
           <button className="ghost" onClick={onUploadFolder} disabled={!!busy}>Upload folder</button>
@@ -370,7 +370,7 @@ export default function Files({ onQuotaChange, user }: Props) {
         totalFiles={totalFiles}
         totalFolders={totalFolders}
         onRefresh={onRefresh}
-        refreshing={busy === 'Refreshing…'}
+        refreshing={busy === 'Refreshing …'}
       />
     </div>
     {replaceConflicts.length > 0 && (
@@ -450,7 +450,7 @@ function renderTree(
       const disabledStyle = { opacity: 0.35, cursor: 'not-allowed' as const, pointerEvents: 'none' as const }
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
@@ -498,7 +498,7 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>

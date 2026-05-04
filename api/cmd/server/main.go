@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
+	"github.com/yann/mist-drive/api/internal/features"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/logger"
 	"github.com/yann/mist-drive/api/internal/quota"
@@ -68,11 +70,19 @@ func main() {
 		start := time.Now()
 		err := c.Next()
 		if !appLog.ShouldSkip(c.Path()) {
-			appLog.Debug("%s %s %d %v",
-				c.Method(),
-				c.Path(),
-				c.Response().StatusCode(),
-				time.Since(start))
+			args := []any{
+				"method", c.Method(),
+				"path", c.Path(),
+				"status", c.Response().StatusCode(),
+				"latency", time.Since(start),
+			}
+			if uid := httpx.UID(c); uid != "" {
+				args = append(args, "uid", uid)
+			}
+			if client := c.Get("X-Client"); client != "" {
+				args = append(args, "client", client)
+			}
+			appLog.LogAttrs(slog.LevelInfo, "request", args...)
 		}
 		return err
 	})
@@ -83,6 +93,7 @@ func main() {
 		Reservations: quota.New(),
 		Events:       events.NewHub(),
 		Version:      Version,
+		Features:     features.Current(),
 	}
 	srv.Register(app)
 

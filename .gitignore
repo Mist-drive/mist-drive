@@ -1,9 +1,10 @@
 api/bin
 api/tmp
+api/.env
 web/node_modules
 shared/node_modules
 web/dist
-deploy/.env
-deploy/data
-deploy/traefik/certs
+.env
+data
+traefik/certs
 .DS_Store

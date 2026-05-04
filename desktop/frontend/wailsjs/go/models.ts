@@ -1,5 +1,19 @@
 export namespace apiclient {
 	
+	export class Features {
+	    sso: boolean;
+	    auditLog: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Features(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sso = source["sso"];
+	        this.auditLog = source["auditLog"];
+	    }
+	}
 	export class ObjectInfo {
 	    key: string;
 	    size: number;

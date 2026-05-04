@@ -21,6 +21,8 @@ export function DownloadFile(arg1:string):Promise<string>;
 
 export function DownloadFolder(arg1:string):Promise<string>;
 
+export function GetFeatures():Promise<apiclient.Features>;
+
 export function GetSettings():Promise<settings.Settings>;
 
 export function GetVersion():Promise<string>;

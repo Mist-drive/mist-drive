@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Login, Logout, Me } from '../wailsjs/go/main/App'
+import { GetFeatures, Login, Logout, Me } from '../wailsjs/go/main/App'
 import { apiclient } from '../wailsjs/go/models'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from '@shared/components/LoadingBar'
@@ -14,13 +14,14 @@ import Home from './screens/Home'
 export default function App() {
   const [user, setUser] = useState<apiclient.PublicUser | null>(null)
   const [checked, setChecked] = useState(false)
+  const [features, setFeatures] = useState<apiclient.Features>(new apiclient.Features())
 
   useEffect(() => onSessionExpired(() => setUser(null)), [])
 
   useEffect(() => {
     startLoading()
     Me()
-      .then((u) => setUser(u))
+      .then((u) => { setUser(u); GetFeatures().then(setFeatures).catch(() => {}) })
       .catch(() => setUser(null))
       .finally(() => { endLoading(); setChecked(true) })
   }, [])
@@ -39,13 +40,18 @@ export default function App() {
         <LoginScreen
           onLogin={async (url, login, password, rememberLogin) => {
             startLoading()
-            try { const u = await Login(url, login, password, rememberLogin); setUser(u) }
+            try {
+              const u = await Login(url, login, password, rememberLogin)
+              setUser(u)
+              GetFeatures().then(setFeatures).catch(() => {})
+            }
             finally { endLoading() }
           }}
         />
       ) : (
         <Home
           user={user}
+          features={features}
           onLogout={async () => {
             startLoading()
             try { await Logout(); setUser(null) }

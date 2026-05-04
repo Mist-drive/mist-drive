@@ -29,6 +29,9 @@ type App struct {
 	// frontend can show the release tag in the header. Defaults to
 	// "dev" for local `wails dev` runs.
 	version string
+	// features holds the capability flags returned by the connected server's
+	// /health endpoint. Refreshed after every successful login or Me() check.
+	features apiclient.Features
 	// forceQuit is flipped by the tray's Quit menu item so the next
 	// close-window event is allowed through OnBeforeClose instead of
 	// being intercepted into a "minimize to tray".
@@ -156,6 +159,9 @@ func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclie
 	a.engine.SetAPI(a.api)
 	a.engine.ClearStatus()
 	_ = a.engine.Start()
+	if h, herr := a.api.Health(); herr == nil {
+		a.features = h.Features
+	}
 	return user, nil
 }
 
@@ -226,8 +232,18 @@ func (a *App) GetVersion() string { return a.version }
 // missing / invalid. Called on app boot to decide whether to land on
 // the login screen or the home screen.
 func (a *App) Me() (apiclient.PublicUser, error) {
-	return a.api.Me()
+	u, err := a.api.Me()
+	if err == nil {
+		if h, herr := a.api.Health(); herr == nil {
+			a.features = h.Features
+		}
+	}
+	return u, err
 }
+
+// GetFeatures returns the feature flags from the connected server.
+// Populated after a successful Me() or Login() call.
+func (a *App) GetFeatures() apiclient.Features { return a.features }
 
 // --- files ---
 

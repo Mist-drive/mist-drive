@@ -148,6 +148,15 @@ func (l *Logger) Info(format string, v ...any)  { l.log(slog.LevelInfo, format, 
 func (l *Logger) Warn(format string, v ...any)  { l.log(slog.LevelWarn, format, v...) }
 func (l *Logger) Error(format string, v ...any) { l.log(slog.LevelError, format, v...) }
 
+// LogAttrs emits a structured record with slog key-value pairs.
+// Use for request logging where fields (uid, status, latency) matter.
+func (l *Logger) LogAttrs(level slog.Level, msg string, args ...any) {
+	if !l.sl.Enabled(context.Background(), level) {
+		return
+	}
+	l.sl.Log(context.Background(), level, msg, args...)
+}
+
 // Fatal logs at error level then exits 1. Use at startup for unrecoverable errors.
 func (l *Logger) Fatal(format string, v ...any) {
 	l.log(slog.LevelError, format, v...)

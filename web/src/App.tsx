@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { clearSession, getUser, fetchVersion } from './lib/api'
+import { clearSession, getUser, fetchHealth, defaultFeatures } from './lib/api'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from './components/LoadingBar'
 import Logo from '@shared/components/Logo'
@@ -45,7 +45,11 @@ function Protected({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const [version, setVersion] = useState('')
-  useEffect(() => { fetchVersion().then(setVersion) }, [])
+  const [features, setFeatures] = useState(defaultFeatures)
+  useEffect(() => {
+    fetchHealth().then(h => { setVersion(h.version); setFeatures(h.features) })
+  }, [])
+  console.log('[features]', features)
   return (
     <ConfirmProvider>
       <div className="app">

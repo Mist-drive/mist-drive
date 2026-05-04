@@ -34,6 +34,10 @@ export function DownloadFolder(arg1) {
   return window['go']['main']['App']['DownloadFolder'](arg1);
 }
 
+export function GetFeatures() {
+  return window['go']['main']['App']['GetFeatures']();
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }

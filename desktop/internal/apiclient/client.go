@@ -97,6 +97,25 @@ type PublicUser struct {
 	UsedBytes  int64  `json:"usedBytes"`
 }
 
+type Features struct {
+	SSO      bool `json:"sso"`
+	AuditLog bool `json:"auditLog"`
+}
+
+type HealthResponse struct {
+	OK       bool     `json:"ok"`
+	Version  string   `json:"version"`
+	Features Features `json:"features"`
+}
+
+func (c *Client) Health() (HealthResponse, error) {
+	var r HealthResponse
+	if err := c.do("GET", "/health", nil, &r); err != nil {
+		return HealthResponse{}, err
+	}
+	return r, nil
+}
+
 type loginReq struct {
 	Login         string `json:"login"`
 	Password      string `json:"password"`
@@ -140,6 +159,7 @@ func (c *Client) do(method, path string, body any, out any) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set("X-Client", "desktop")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -266,6 +286,7 @@ func (c *Client) DownloadFolder(prefix, destPath string) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("X-Client", "desktop")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -305,6 +326,7 @@ func (c *Client) PreviewFile(key string) (PreviewResult, error) {
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	req.Header.Set("X-Client", "desktop")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

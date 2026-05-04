@@ -19,6 +19,7 @@ import (
 	"github.com/gofiber/websocket/v2"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
+	"github.com/yann/mist-drive/api/internal/features"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -33,12 +34,15 @@ type Server struct {
 	Reservations *quota.Reservations
 	Events       *events.Hub
 	Version      string
+	Features     features.Features
 	procMu       sync.RWMutex
 	processing   map[string]map[string]bool // userID → processing path prefixes
 }
 
 func (s *Server) Register(app *fiber.App) {
-	app.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true, "version": s.Version}) })
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"ok": true, "version": s.Version, "features": s.Features})
+	})
 	app.Post("/auth/login", s.login)
 
 	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret))

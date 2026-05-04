@@ -42,7 +42,7 @@ RUN adduser -D -u 1000 appuser \
   && apk add --no-cache curl ca-certificates tzdata
 
 WORKDIR /app
-RUN mkdir -p /data /app/logs && chown -R appuser:appuser /app /data
+RUN mkdir -p /app/data/api /app/data/logs && chown -R appuser:appuser /app
 
 COPY --from=builder /out/mist-drive /app/mist-drive
 

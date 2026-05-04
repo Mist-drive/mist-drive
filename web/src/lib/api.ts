@@ -111,6 +111,7 @@ document.addEventListener('visibilitychange', () => {
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
+  headers.set('X-Client', 'web')
   const tok = getToken()
   if (tok) headers.set('Authorization', `Bearer ${tok}`)
   startLoading()
@@ -130,14 +131,16 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 }
 
-export async function fetchVersion(): Promise<string> {
+export type Features = { sso: boolean; auditLog: boolean }
+export const defaultFeatures: Features = { sso: false, auditLog: false }
+
+export async function fetchHealth(): Promise<{ version: string; features: Features }> {
   try {
     const res = await fetch('/health')
-    if (!res.ok) return ''
-    const data = await res.json()
-    return data.version ?? ''
+    if (!res.ok) return { version: '', features: defaultFeatures }
+    return res.json()
   } catch {
-    return ''
+    return { version: '', features: defaultFeatures }
   }
 }
 

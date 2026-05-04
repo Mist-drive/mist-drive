@@ -42,7 +42,7 @@ export default function Files() {
   const [files, setFiles] = useState<ObjectInfo[]>([])
   const [processing, setProcessing] = useState<string[]>([])
   const [me, setMe] = useState<PublicUser | null>(getUser())
-  const [refreshing, setRefreshing] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [editingPath, setEditingPath] = useState<string | null>(null)
   const [editingValue, setEditingValue] = useState('')
@@ -87,6 +87,17 @@ export default function Files() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [active, queued])
 
+  const uploading = Object.keys(active).length > 0 || queued > 0
+  const isBusy = !!busy || uploading
+  const statusText = busy ?? (uploading ? 'Uploading …' : null)
+
+  const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
+    setBusy(label); setErr(null)
+    try { return await fn() }
+    catch (e: any) { setErr(e.message); return null }
+    finally { setBusy(null) }
+  }
+
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
@@ -117,15 +128,7 @@ export default function Files() {
   }, [])
 
   const onRefresh = async () => {
-    setRefreshing(true)
-    try {
-      await api.recomputeUsage()
-      await refresh()
-    } catch (e: any) {
-      setErr(e.message)
-    } finally {
-      setRefreshing(false)
-    }
+    await withBusy('Refreshing …', async () => { await api.recomputeUsage(); await refresh() })
   }
 
   const runOne = async (key: string, file: File) => {
@@ -160,7 +163,7 @@ export default function Files() {
     }
   }
 
-  const runUploadJobs = async (jobs: { key: string; file: File }[]) => {
+  const runUploadJobs = async (jobs: { key: string; file: File }[], label = 'Uploading …') => {
     if (jobs.length === 0) return
     setQueued(q => q + jobs.length)
 
@@ -187,38 +190,46 @@ export default function Files() {
     cancelAll.current = false
     quotaHit.current = false
     setErr(null)
-    let idx = 0
-    const worker = async () => {
-      while (idx < jobs.length) {
-        const my = idx++
-        if (cancelAll.current || quotaHit.current) {
-          setQueued(q => q - 1)
-          continue
+    setBusy(label)
+    try {
+      let idx = 0
+      const worker = async () => {
+        while (idx < jobs.length) {
+          const my = idx++
+          if (cancelAll.current || quotaHit.current) {
+            setQueued(q => q - 1)
+            continue
+          }
+          await runOne(jobs[my].key, jobs[my].file)
         }
-        await runOne(jobs[my].key, jobs[my].file)
       }
+      await Promise.all(
+        Array.from({ length: Math.min(FILE_CONCURRENCY, jobs.length) }, worker),
+      )
+      await refresh()
+    } finally {
+      setBusy(null)
     }
-    await Promise.all(
-      Array.from({ length: Math.min(FILE_CONCURRENCY, jobs.length) }, worker),
-    )
-    await refresh()
   }
 
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files
     if (!list || list.length === 0) return
+    const isFolder = e.target === folderInput.current
     const jobs = Array.from(list).map(f => ({
       key: (f as any).webkitRelativePath || f.name,
       file: f,
     }))
-    await runUploadJobs(jobs)
+    await runUploadJobs(jobs, isFolder ? 'Uploading folder …' : 'Uploading …')
     if (fileInput.current) fileInput.current.value = ''
     if (folderInput.current) folderInput.current.value = ''
   }
 
   const onDownload = async (key: string) => {
-    const { url } = await api.download(key)
-    window.location.href = url
+    await withBusy('Downloading …', async () => {
+      const { url } = await api.download(key)
+      window.location.href = url
+    })
   }
   const onDelete = async (key: string) => {
     const ok = await confirm({
@@ -228,8 +239,7 @@ export default function Files() {
       danger: true,
     })
     if (!ok) return
-    await api.deleteFile(key)
-    refresh()
+    await withBusy('Deleting …', async () => { await api.deleteFile(key); await refresh() })
   }
   const onDeleteFolder = async (path: string) => {
     const ok = await confirm({
@@ -239,8 +249,7 @@ export default function Files() {
       danger: true,
     })
     if (!ok) return
-    await api.deleteFolder(path + '/')
-    refresh()
+    await withBusy('Deleting …', async () => { await api.deleteFolder(path + '/'); await refresh() })
   }
   const onDownloadFolder = (path: string) => {
     window.location.href = api.downloadZipUrl(path + '/')
@@ -248,11 +257,11 @@ export default function Files() {
 
   const onMkdir = async () => {
     if (!newFolder?.trim()) return
-    try {
+    await withBusy('Creating …', async () => {
       await api.mkdir(newFolder.trim())
       setNewFolder(null)
       await refresh()
-    } catch (e: any) { setErr(e.message) }
+    })
   }
 
   const onCancelUpload = (key: string) => {
@@ -301,14 +310,14 @@ export default function Files() {
       }
     }
 
-    await Promise.all(
-      items
-        .map(item => item.webkitGetAsEntry?.())
-        .filter((entry): entry is FileSystemEntry => !!entry)
-        .map(entry => processEntry(entry, prefix)),
-    )
+    const entries = items
+      .map(item => item.webkitGetAsEntry?.())
+      .filter((entry): entry is FileSystemEntry => !!entry)
+    const hasFolder = entries.some(e => e.isDirectory)
 
-    await runUploadJobs(jobs)
+    await Promise.all(entries.map(entry => processEntry(entry, prefix)))
+
+    await runUploadJobs(jobs, hasFolder ? 'Uploading folder …' : 'Uploading …')
   }
 
   const activeList = Object.values(active)
@@ -374,12 +383,7 @@ export default function Files() {
     if (!newName) return
     const oldName = oldPath.split('/').pop() ?? oldPath
     if (newName === oldName) return
-    try {
-      await api.rename(oldPath, newName)
-      await refresh()
-    } catch (e: any) {
-      setErr(e.message)
-    }
+    await withBusy('Renaming …', async () => { await api.rename(oldPath, newName); await refresh() })
   }
 
   return (
@@ -404,11 +408,12 @@ export default function Files() {
         <div style={{ flex: 1 }}>
           {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
           {renameErr && <p className="error" style={{ margin: 0 }}>{renameErr} <button className="ghost" style={{ padding: '.1rem .4rem', fontSize: '0.8rem' }} onClick={() => setRenameErr(null)}>✕</button></p>}
+          {statusText && <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>{statusText}</p>}
         </div>
         <div className="row" style={{ gap: '.5rem', flexShrink: 0 }}>
-          <button type="button" className="ghost" onClick={() => setNewFolder('')}>New folder</button>
-          <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>Upload files</button>
-          <button type="button" className="ghost" onClick={() => folderInput.current?.click()}>Upload folder</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => setNewFolder('')}>New folder</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => fileInput.current?.click()}>Upload files</button>
+          <button type="button" className="ghost" disabled={isBusy} onClick={() => folderInput.current?.click()}>Upload folder</button>
         </div>
       </div>
       <div className="row" style={{ marginBottom: '.6rem' }}>
@@ -477,7 +482,7 @@ export default function Files() {
           totalFiles={totalFiles}
           totalFolders={totalFolders}
           onRefresh={onRefresh}
-          refreshing={refreshing}
+          refreshing={busy === 'Refreshing …'}
         />
       )}
     </div>
@@ -551,7 +556,7 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
@@ -605,7 +610,7 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming…</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>renaming …</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>

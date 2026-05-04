@@ -11,7 +11,7 @@ services:
     # Single unified image: Go API + embedded Vite SPA. Serves / and
     # /api/* on the same port — no separate web container.
     build:
-      context: ..
+      context: .
       dockerfile: api/Dockerfile
       # BuildKit's default bridge network can fail to resolve
       # proxy.golang.org / registry.bun.sh on some hosts; host network
@@ -25,7 +25,6 @@ services:
       JWT_TTL: ${JWT_TTL}
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      DATA_DIR: /data
       S3_ENDPOINT: minio:9000
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -35,8 +34,8 @@ services:
       UPLOAD_TTL_HOURS: ${UPLOAD_TTL_HOURS}
       LOG_LEVEL: ${LOG_LEVEL}
     volumes:
-      - ./data/api:/data
-      - ./data/logs:/app/logs
+      - ./data/api:/app/data/api
+      - ./data/logs:/app/data/logs
     depends_on:
       minio:
         condition: service_healthy
@@ -44,7 +43,7 @@ services:
     mem_limit: 256m
     cpus: 0.5
     ports:
-      - "3000:3000"
+      - "8080:3000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
       interval: 5s

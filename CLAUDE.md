@@ -37,12 +37,13 @@ Wails bindings regen: `cd desktop && wails generate module`
 - **`internal/quota/`** — In-memory upload quota reservations. `disk.go` has `DiskFree(path)` via `syscall.Statfs`.
 - **`internal/events/`** — WebSocket event hub for push notifications (`files-changed`).
 - **`internal/webui/`** — `//go:embed` of `web/dist/` into Go binary. Must be called AFTER route registration (fall-through handler).
-- **`/health`** — returns `{"ok": true, "version": "..."}`. Version injected at build time via `-ldflags`; defaults to `"dev"`.
+- **`internal/features/`** — CE/Pro feature flags. `features.go` defines `Features` struct + `Current()`. `ce.go` (`//go:build !pro`) sets all flags false. `pro.go` (`//go:build pro`, private repo only) sets all flags true.
+- **`/health`** — returns `{"ok": true, "version": "...", "features": {...}}`. Version injected at build time via `-ldflags`; defaults to `"dev"`. Features computed at compile time via build tag.
 
 ### Web (`web/`)
 
 - Vite + Bun + React + TypeScript. No component library.
-- `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client. `fetchVersion()` hits `/health` unauthenticated.
+- `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client. `fetchHealth()` hits `/health` unauthenticated and returns `{version, features}`. 401 responses auto-redirect to `/login` after clearing the session.
 - `src/lib/uploader.ts` — multipart upload with presigned URLs, 8 MiB parts, 4 concurrent PUT workers, abort support.
 - Pages: `Login.tsx`, `Files.tsx`, `Admin.tsx`.
 
@@ -55,6 +56,7 @@ Wails bindings regen: `cd desktop && wails generate module`
   - `PickFolderForUpload` returns `[]LocalFile` with sizes.
   - `UploadFolderPicked(skipKeys []string)` — skip list for diff uploads.
   - `CancelUpload(key)` / `CancelUploads()` — per-file and batch cancel via `context.Context`.
+  - `GetFeatures()` — returns `apiclient.Features` fetched from server `/health` after login/Me. Desktop 401 responses trigger session expiry via `session.ts` pub/sub → `setUser(null)` in `App.tsx`.
 - **Sync engine** (`internal/sync/engine.go`) — fsnotify-driven reconcile loop. Per-folder upload/download toggles. Keeps a 200-entry log ring buffer for the history modal. `SetAPI()` / `ClearStatus()` for clean re-auth after token expiry.
 - **Settings** (`internal/settings/`) — JSON on disk, multi-environment (per API URL). Global flags: `startOnLaunch`, `closeToTray` (default true — window hides to tray on close, quit via tray menu).
 - **SSO handoff** — "Open Web" passes JWT via URL fragment (`#token=`), not query param. Web app consumes + scrubs immediately.
@@ -101,3 +103,5 @@ Wails bindings regen: `cd desktop && wails generate module`
 - ~~**Shared UI**~~ — `shared/` directory with components + libs aliased as `@shared`; covers `LoadingBar`, `LoginCard`, `Logo` (with version), `ReplaceDialog`, `UploadCard`, `PreviewContent`, `StorageStats`, and libs `format`, `tree`, `upload`, `loading`
 - ~~**Harmonized login**~~ — shared `LoginCard` with logo + version; web fetches version from `/health`; desktop from `GetVersion()`; server field desktop-only; sign-in button disabled until login + password filled
 - ~~**Version in UI**~~ — `/health` exposes `version`; shown in navbar (web) and header bar (desktop); both login pages display it below the logo
+- ~~**CE/Pro feature flags**~~ — `api/internal/features/` package; `ce.go` (`!pro` tag) ships in public repo with all flags false; `pro.go` (`pro` tag) lives in private repo only; `/health` returns `features` object; web reads via `fetchHealth()`, desktop via `GetFeatures()` Wails binding
+- ~~**401 auto-redirect**~~ — web: `req()` and `previewFile()` detect 401 → `clearSession()` + `window.location.replace('/login')`; desktop: `session.ts` pub/sub, `is401()` helper, `notifySessionExpired()` called in `Files.tsx`/`Home.tsx` catch blocks

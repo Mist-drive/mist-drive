@@ -8,12 +8,13 @@ import SyncPanel from './Sync'
 
 type Props = {
   user: apiclient.PublicUser
+  features: apiclient.Features
   onLogout: () => Promise<void>
 }
 
 type Tab = 'files' | 'sync'
 
-export default function Home({ user: initial, onLogout }: Props) {
+export default function Home({ user: initial, features, onLogout }: Props) {
   const [user, setUser] = useState(initial)
   const [tab, setTab] = useState<Tab>('files')
   const [version, setVersion] = useState('')
