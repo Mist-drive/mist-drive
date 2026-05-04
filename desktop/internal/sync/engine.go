@@ -331,7 +331,9 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 		if !f.Enabled {
 			continue
 		}
-		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll, gen)
+		// Download is disabled: local tree is always source of truth.
+		// To re-enable bidirectional sync, replace false with f.Download.
+		e.reconcileOne(ctx, f, f.Upload, false, remoteAll, gen)
 	}
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
@@ -436,25 +438,23 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 		if ctx.Err() != nil || e.st.Generation() != gen {
 			return
 		}
-		// Upload-only mode treats the local folder as the source of
-		// truth: a file present remotely but missing locally means the
-		// user deleted it from their file manager, so we mirror that
-		// deletion to the remote. In bidirectional mode we can't tell
-		// a local delete apart from a new remote file without an
-		// index, so we fall back to downloading (safer default).
+		// Local is source of truth: a file present remotely but missing
+		// locally means the user deleted it, so mirror that deletion up.
 		if doUpload && !doDownload {
 			if err := e.deleteRemote(f, rel); err != nil {
 				e.recordErr(err)
 			}
 			continue
 		}
+		// Both directions off — nothing to do.
 		if !doDownload {
 			e.bumpSkipped()
 			continue
 		}
-		if err := e.download(f, rel); err != nil {
-			e.recordErr(err)
-		}
+		// [download disabled] Re-enable by passing f.Download in reconcileAll.
+		// if err := e.download(f, rel); err != nil {
+		// 	e.recordErr(err)
+		// }
 	}
 }
 

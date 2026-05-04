@@ -57,6 +57,7 @@ export default function Files({ onQuotaChange, user }: Props) {
   const [uploadActive, setUploadActive] = useState<Record<string, UploadEntry>>({})
   const [uploadDone, setUploadDone] = useState(0)
   const [, setTick] = useState(0)
+  const [downloadingKeys, setDownloadingKeys] = useState<Set<string>>(new Set())
   const uploadTotalRef = useRef(0)
   const cancelledKeysRef = useRef<Set<string>>(new Set())
   const replaceResolve = useRef<((choice: 'replace' | 'diff' | 'cancel') => void) | null>(null)
@@ -172,9 +173,14 @@ export default function Files({ onQuotaChange, user }: Props) {
   }
 
   const onDownload = async (key: string) => {
-    const dest = await withBusy(t('status.downloading'), () => DownloadFile(key))
-    if (dest) setBusy(t('status.savedTo', { path: dest }))
-    setTimeout(() => setBusy(null), 2500)
+    setDownloadingKeys(s => new Set(s).add(key))
+    try {
+      const dest = await withBusy(t('status.downloading'), () => DownloadFile(key))
+      if (dest) setBusy(t('status.savedTo', { path: dest }))
+      setTimeout(() => setBusy(null), 2500)
+    } finally {
+      setDownloadingKeys(s => { const n = new Set(s); n.delete(key); return n })
+    }
   }
   const onDelete = async (key: string) => {
     const ok = await confirm({ title: t('files.deleteTitle'), message: t('files.deleteConfirm', { key }), confirmText: t('files.delete'), danger: true })
@@ -191,9 +197,14 @@ export default function Files({ onQuotaChange, user }: Props) {
     onQuotaChange?.()
   }
   const onDownloadFolder = async (path: string) => {
-    const dest = await withBusy(t('status.downloadingFolder'), () => DownloadFolder(path + '/'))
-    if (dest) setBusy(t('status.savedTo', { path: dest }))
-    setTimeout(() => setBusy(null), 2500)
+    setDownloadingKeys(s => new Set(s).add(path))
+    try {
+      const dest = await withBusy(t('status.downloadingFolder'), () => DownloadFolder(path + '/'))
+      if (dest) setBusy(t('status.savedTo', { path: dest }))
+      setTimeout(() => setBusy(null), 2500)
+    } finally {
+      setDownloadingKeys(s => { const n = new Set(s); n.delete(path); return n })
+    }
   }
   const onMkdir = async () => {
     if (!newFolder?.trim()) return
@@ -357,7 +368,7 @@ export default function Files({ onQuotaChange, user }: Props) {
           </tr>
         </thead>
         <tbody>
-          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, t)}
+          {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, downloadingKeys, t)}
         </tbody>
       </table>
       <StorageStats
@@ -413,6 +424,7 @@ function renderTree(
   onCommitRename: (oldPath: string) => void,
   isSyncRoot: (path: string) => boolean,
   onPreview: (k: string) => void,
+  downloadingKeys: Set<string>,
   t: ReturnType<typeof useTranslation>['t'],
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
@@ -454,7 +466,8 @@ function renderTree(
           <button className="ghost" title={syncRoot ? t('files.syncRootRename') : t('files.rename')} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
             onClick={(e) => { e.stopPropagation(); if (!syncRoot) { setEditingPath(c.path); setEditingValue(c.name) } }}>✏️</button>
           <button className="ghost" title={t('files.downloadZip')} style={iconBtn}
-            onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>⬇</button>
+            disabled={downloadingKeys.has(c.path)}
+            onClick={(e) => { e.stopPropagation(); onDownloadFolder(c.path) }}>{downloadingKeys.has(c.path) ? '⏳' : '⬇'}</button>
           <button className="danger" title={syncRoot ? t('files.syncRootDelete') : t('files.delete')} style={{ ...iconBtn, ...(syncRoot ? disabledStyle : {}) }}
             onClick={(e) => { e.stopPropagation(); if (!syncRoot) onDeleteFolder(c.path) }}>✕</button>
         </div>
@@ -475,7 +488,7 @@ function renderTree(
         </tr>,
       )
       if (open) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, t))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, isSyncRoot, onPreview, downloadingKeys, t))
       }
     } else {
       const nameCell = editing ? (
@@ -502,7 +515,8 @@ function renderTree(
           <button className="ghost" title={t('files.rename')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
           <button className="ghost" title={t('files.download')} style={iconBtn}
-            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
+            disabled={downloadingKeys.has(c.path)}
+            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>{downloadingKeys.has(c.path) ? '⏳' : '⬇'}</button>
           <button className="danger" title={t('files.delete')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
         </div>

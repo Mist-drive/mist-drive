@@ -68,6 +68,7 @@ export default function Files() {
   const cancelAll = useRef(false)
   const quotaHit = useRef(false)
   const [, setTick] = useState(0)
+  const [downloadingKeys, setDownloadingKeys] = useState<Set<string>>(new Set())
   const dragCounter = useRef(0)
   const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -228,10 +229,15 @@ export default function Files() {
   }
 
   const onDownload = async (key: string) => {
-    await withBusy(t('status.downloading'), async () => {
-      const { url } = await api.download(key)
-      window.location.href = url
-    })
+    setDownloadingKeys(s => new Set(s).add(key))
+    try {
+      await withBusy(t('status.downloading'), async () => {
+        const { url } = await api.download(key)
+        window.location.href = url
+      })
+    } finally {
+      setDownloadingKeys(s => { const n = new Set(s); n.delete(key); return n })
+    }
   }
   const onDelete = async (key: string) => {
     const ok = await confirm({
@@ -473,7 +479,7 @@ export default function Files() {
             <th></th>
           </tr></thead>
           <tbody>
-            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, t)}
+            {renderTree(buildTree(filteredFiles), 0, effectiveExpanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dragHandlers, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, downloadingKeys, t)}
           </tbody>
         </table>
       </div>
@@ -527,6 +533,7 @@ function renderTree(
   setEditingValue: (v: string) => void,
   onCommitRename: (oldPath: string) => void,
   onPreview: (k: string) => void,
+  downloadingKeys: Set<string>,
   t: ReturnType<typeof useTranslation>['t'],
 ): JSX.Element[] {
   const rows: JSX.Element[] = []
@@ -593,7 +600,7 @@ function renderTree(
         </tr>,
       )
       if (isOpen) {
-        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, t))
+        rows.push(...renderTree(c, depth + 1, expanded, toggle, onDownload, onDelete, onDeleteFolder, onDownloadFolder, dnd, isProcessing, editingPath, editingValue, setEditingPath, setEditingValue, onCommitRename, onPreview, downloadingKeys, t))
       }
     } else {
       const nameCell = editing ? (
@@ -620,7 +627,8 @@ function renderTree(
           <button className="ghost" title={t('files.rename')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); setEditingPath(c.path); setEditingValue(c.name) }}>✏️</button>
           <button className="ghost" title={t('files.download')} style={iconBtn}
-            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>⬇</button>
+            disabled={downloadingKeys.has(c.path)}
+            onClick={(e) => { e.stopPropagation(); onDownload(c.path) }}>{downloadingKeys.has(c.path) ? '⏳' : '⬇'}</button>
           <button className="danger" title={t('files.delete')} style={iconBtn}
             onClick={(e) => { e.stopPropagation(); onDelete(c.path) }}>✕</button>
         </div>

@@ -6,7 +6,6 @@ import {
   RemoveSyncFolder,
   SaveSettings,
   SetBandwidthLimits,
-  SetFolderDirections,
   SetFolderEnabled,
   SyncHistory,
   SyncStatus,
@@ -98,13 +97,7 @@ export default function SyncPanel() {
         </p>
       )}
       {s.folders.map((f, i) => {
-        const up = f.upload
-        const down = f.download
         const enabled = f.enabled
-        const flip = async (nextUp: boolean, nextDown: boolean) => {
-          await SetFolderDirections(i, nextUp, nextDown)
-          await refreshSettings()
-        }
         const flipEnabled = async () => {
           await SetFolderEnabled(i, !enabled)
           await refreshSettings()
@@ -139,18 +132,6 @@ export default function SyncPanel() {
                   borderColor: enabled ? 'var(--accent-green, #2ea043)' : 'var(--accent-red, #d14343)',
                 }}
               >{t('sync.title')}</button>
-              <DirectionToggle
-                icon="↑"
-                tooltip={up ? t('sync.uploadEnabled') : t('sync.uploadDisabled')}
-                active={up}
-                onClick={() => flip(!up, down)}
-              />
-              <DirectionToggle
-                icon="↓"
-                tooltip={down ? t('sync.downloadEnabled') : t('sync.downloadDisabled')}
-                active={down}
-                onClick={() => flip(up, !down)}
-              />
               <button className="danger" onClick={() => onRemove(i)}
                 style={{ padding: '.3rem .6rem' }}>{t('sync.remove')}</button>
             </div>
@@ -208,30 +189,6 @@ export default function SyncPanel() {
         {t('sync.closeToTray')}
       </label>
     </div>
-  )
-}
-
-// Direction toggle: a small icon button that shows whether upload or
-// download is enabled. Active = accent color, inactive = muted.
-function DirectionToggle({
-  icon, tooltip, active, onClick,
-}: { icon: string; tooltip: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      className="ghost"
-      onClick={onClick}
-      title={tooltip}
-      style={{
-        padding: '.3rem .55rem',
-        fontSize: '0.95rem',
-        lineHeight: 1,
-        opacity: active ? 1 : 0.4,
-        borderColor: active ? 'var(--accent)' : 'var(--border)',
-        color: active ? 'var(--accent)' : 'var(--text-secondary)',
-      }}
-    >
-      {icon}
-    </button>
   )
 }
 

@@ -6,7 +6,8 @@ web/dist
 web/tsconfig.tsbuildinfo
 shared/node_modules
 desktop/frontend/node_modules
-desktop/frontend/dist
+desktop/frontend/dist/*
+!desktop/frontend/dist/index.html
 desktop/frontend/package.json.md5
 .env
 data
