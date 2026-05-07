@@ -116,6 +116,10 @@
     "deviceExpires": "Expires {{date}}",
     "revokeDevice": "Revoke",
     "revokeAll": "Revoke all",
+    "revokeDeviceConfirmTitle": "Revoke this device?",
+    "revokeDeviceConfirmMessage": "This device will be removed and TOTP will be required on next login.",
+    "revokeAllConfirmTitle": "Revoke all trusted devices?",
+    "revokeAllConfirmMessage": "All trusted devices will be removed and TOTP will be required on next login for each one.",
     "loginHistory": "Login history",
     "noLoginHistory": "No login records yet."
   },

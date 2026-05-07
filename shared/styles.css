@@ -414,7 +414,11 @@ td.muted, .muted { color: var(--text-secondary); }
 }
 
 /* --- Settings --- */
-.settings-page { max-width: 640px; }
+.settings-page { max-width: 1100px; }
+.settings-columns { display: flex; gap: 2.5rem; align-items: flex-start; }
+.settings-col-left { flex: 1; min-width: 0; max-width: 640px; }
+.settings-col-right { flex: 1; min-width: 0; }
+@media (max-width: 760px) { .settings-columns { flex-direction: column; } .settings-col-left { max-width: 100%; } }
 .settings-section { margin-top: 1.5rem; }
 .settings-section h3 { font-size: 1rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 1rem; }
 .settings-row { display: flex; align-items: center; gap: 1rem; margin-bottom: .8rem; }
@@ -433,13 +437,13 @@ td.muted, .muted { color: var(--text-secondary); }
 .device-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .5rem; margin: .4rem 0; }
 .device-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 8px; padding: .6rem .9rem; }
 .device-info { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-.device-label { font-size: 0.82rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.device-label { font-size: 0.82rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .device-expiry { font-size: 0.75rem; }
 .login-history-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .4rem; margin: .4rem 0; }
 .login-history-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 8px; padding: .6rem .9rem; }
 .login-history-info { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
 .login-history-ip { font-size: 0.85rem; font-family: monospace; color: var(--text-primary); }
-.login-history-ua { font-size: 0.73rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.login-history-ua { font-size: 0.73rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .login-history-date { font-size: 0.75rem; white-space: nowrap; flex-shrink: 0; }
 
 /* --- Responsive --- */

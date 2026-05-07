@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import { api, type PublicDevice, type LoginRecord } from '../lib/api'
+import { useConfirm } from '../components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
 type Phase =
@@ -14,6 +15,7 @@ type Phase =
 
 export default function Settings() {
   const { t } = useTranslation()
+  const confirm = useConfirm()
   const [totpEnabled, setTotpEnabled] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [qrDataUrl, setQrDataUrl] = useState('')
@@ -87,19 +89,21 @@ export default function Settings() {
   const cancel = () => { setPhase('idle'); setErr(null) }
 
   const revokeDevice = async (id: string) => {
+    if (!await confirm({ title: t('settings.revokeDeviceConfirmTitle'), message: t('settings.revokeDeviceConfirmMessage'), danger: true })) return
     await api.devices.revoke(id)
     setDevices(ds => ds.filter(d => d.id !== id))
   }
 
   const revokeAll = async () => {
+    if (!await confirm({ title: t('settings.revokeAllConfirmTitle'), message: t('settings.revokeAllConfirmMessage'), danger: true })) return
     await api.devices.revokeAll()
     setDevices([])
   }
 
   return (
     <div className="settings-page">
-      <h2>{t('settings.title')}</h2>
-
+      <div className="settings-columns">
+      <div className="settings-col-left">
       <section className="settings-section">
         <h3>{t('settings.security')}</h3>
         <div className="settings-row">
@@ -222,48 +226,53 @@ export default function Settings() {
       </section>
 
       <section className="settings-section">
-        <h3>{t('settings.trustedDevices')}</h3>
-        {devices.length === 0 ? (
-          <p className="muted">{t('settings.noDevices')}</p>
-        ) : (
-          <>
-            <ul className="device-list">
-              {devices.map(d => (
-                <li key={d.id} className="device-item">
-                  <div className="device-info">
-                    <span className="device-label">{d.label || t('settings.unknownDevice')}</span>
-                    <span className="muted device-expiry">{t('settings.deviceExpires', { date: new Date(d.expiresAt).toLocaleDateString() })}</span>
+          <h3>{t('settings.trustedDevices')}</h3>
+          {devices.length === 0 ? (
+            <p className="muted">{t('settings.noDevices')}</p>
+          ) : (
+            <>
+              <ul className="device-list">
+                {devices.map(d => (
+                  <li key={d.id} className="device-item">
+                    <div className="device-info">
+                      <span className="device-label">{d.label || t('settings.unknownDevice')}</span>
+                      <span className="muted device-expiry">{t('settings.deviceExpires', { date: new Date(d.expiresAt).toLocaleDateString() })}</span>
+                    </div>
+                    <button className="ghost" onClick={() => revokeDevice(d.id)}>{t('settings.revokeDevice')}</button>
+                  </li>
+                ))}
+              </ul>
+              <div className="settings-actions">
+                <button className="danger ghost" onClick={revokeAll}>{t('settings.revokeAll')}</button>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+
+      <div className="settings-col-right">
+        <section className="settings-section">
+          <h3>{t('settings.loginHistory')}</h3>
+          {loginHistory.length === 0 ? (
+            <p className="muted">{t('settings.noLoginHistory')}</p>
+          ) : (
+            <ul className="login-history-list">
+              {loginHistory.map((r, i) => (
+                <li key={i} className="login-history-item">
+                  <div className="login-history-info">
+                    <span className="login-history-ip">{r.ip}</span>
+                    {r.userAgent && <span className="muted login-history-ua">{r.userAgent}</span>}
                   </div>
-                  <button className="ghost" onClick={() => revokeDevice(d.id)}>{t('settings.revokeDevice')}</button>
+                  <span className="muted login-history-date">
+                    {new Date(r.at).toLocaleString()}
+                  </span>
                 </li>
               ))}
             </ul>
-            <div className="settings-actions">
-              <button className="danger ghost" onClick={revokeAll}>{t('settings.revokeAll')}</button>
-            </div>
-          </>
-        )}
-      </section>
-      <section className="settings-section">
-        <h3>{t('settings.loginHistory')}</h3>
-        {loginHistory.length === 0 ? (
-          <p className="muted">{t('settings.noLoginHistory')}</p>
-        ) : (
-          <ul className="login-history-list">
-            {loginHistory.map((r, i) => (
-              <li key={i} className="login-history-item">
-                <div className="login-history-info">
-                  <span className="login-history-ip">{r.ip}</span>
-                  {r.userAgent && <span className="muted login-history-ua">{r.userAgent}</span>}
-                </div>
-                <span className="muted login-history-date">
-                  {new Date(r.at).toLocaleString()}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+          )}
+        </section>
+      </div>
+      </div>
     </div>
   )
 }

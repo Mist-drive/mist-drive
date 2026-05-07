@@ -11,7 +11,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const totpIssuer = "Mist Drive"
 const backupCodeCount = 8
 
 // verifyTOTP checks a code against the user's TOTP secret or backup codes.
@@ -54,8 +53,12 @@ func (s *Server) totpSetup(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "user gone")
 	}
+	issuer := "Mist Drive"
+	if s.Version == "dev" {
+		issuer += " (dev)"
+	}
 	key, err := totp.Generate(totp.GenerateOpts{
-		Issuer:      totpIssuer,
+		Issuer:      issuer,
 		AccountName: u.Login,
 	})
 	if err != nil {
