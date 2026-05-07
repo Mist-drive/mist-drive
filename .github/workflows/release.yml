@@ -1,28 +1,25 @@
-name: build_desktop
+name: release
 
-# Triggered only on version tags so random pushes don't spam Releases.
-# Push a tag with `git tag v1.2.3 && git push origin v1.2.3` to cut one.
+# Cut a release: git tag v1.2.3 && git push origin v1.2.3
+# All jobs are gated on `test`. Docker + desktop builds run in parallel
+# once tests are green. The final `release` job waits for every leg and
+# then publishes GitHub release notes + desktop binaries.
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ['v*.*.*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # Gate: nothing ships unless unit tests are green. Integration tests
-  # need Docker-in-Docker and are slower — we run them too since the
-  # runners have Docker available, but if that ever becomes flaky you
-  # can swap `make test` for `make test-unit` here.
   test:
     name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache-dependency-path: |
@@ -35,15 +32,48 @@ jobs:
       - name: Run desktop tests
         run: cd desktop && go test ./...
 
-  # Desktop builds run in parallel across OSes via a matrix. Both legs
-  # depend on `test` so a red build never produces release artifacts.
+  build-docker:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/mist-drive
+          # Exact semver tag (e.g. 1.2.3) + `latest`.
+          # No sha floaters — registry filled up too fast last time.
+          flavor: |
+            latest=true
+          tags: |
+            type=semver,pattern={{version}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+
   build-desktop:
     name: Build desktop (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: test
     strategy:
-      # Don't cancel the other OS on a single failure — we still want
-      # to see e.g. a windows-only break alongside a linux success.
+      # Keep both legs running even if one fails — useful to see e.g.
+      # a windows-only break alongside a linux success.
       fail-fast: false
       matrix:
         include:
@@ -61,8 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache-dependency-path: desktop/go.sum
@@ -123,13 +152,11 @@ jobs:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
 
-  # Final job: pulls all artifacts and cuts the GitHub release. Only
-  # runs if every build matrix leg succeeded, so releases are always
-  # either complete or not created.
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: build-desktop
+    # Wait for both Docker push and all desktop matrix legs.
+    needs: [build-docker, build-desktop]
     steps:
       - uses: actions/download-artifact@v4
         with:
