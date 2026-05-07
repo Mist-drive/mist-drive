@@ -12,6 +12,7 @@
 package httpx
 
 import (
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/features"
+	"github.com/yann/mist-drive/api/internal/logger"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -34,10 +36,19 @@ type Server struct {
 	Uploads      *uploads.Store
 	Reservations *quota.Reservations
 	Events       *events.Hub
+	Log          *logger.Logger
 	Version      string
 	Features     features.Features
 	procMu       sync.RWMutex
 	processing   map[string]map[string]bool // userID → processing path prefixes
+}
+
+// secWarn emits a structured WARN security event. No-ops when Log is nil
+// (e.g. in unit tests that create a bare Server{}).
+func (s *Server) secWarn(msg string, args ...any) {
+	if s.Log != nil {
+		s.Log.LogAttrs(slog.LevelWarn, msg, args...)
+	}
 }
 
 func (s *Server) Register(app *fiber.App) {
@@ -55,8 +66,9 @@ func (s *Server) Register(app *fiber.App) {
 	})
 	app.Post("/auth/login", s.login)
 
-	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime))
+	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime, s.Log))
 	api.Get("/me", s.me)
+	api.Get("/login-history", s.loginHistory)
 
 	files := api.Group("/files")
 	files.Get("/", s.listFiles)
@@ -83,6 +95,17 @@ func (s *Server) Register(app *fiber.App) {
 		}
 		return fiber.ErrUpgradeRequired
 	}, websocket.New(s.wsHandler))
+
+	totp := api.Group("/totp")
+	totp.Get("/setup", s.totpSetup)
+	totp.Post("/enable", s.totpEnable)
+	totp.Delete("/disable", s.totpDisable)
+	totp.Post("/regen-backup", s.totpRegenBackup)
+
+	devices := api.Group("/devices")
+	devices.Get("/", s.listDevices)
+	devices.Delete("/", s.revokeAllDevices)
+	devices.Delete("/:id", s.revokeDevice)
 
 	admin := api.Group("/admin", AdminOnly)
 	admin.Get("/users", s.adminListUsers)

@@ -34,7 +34,10 @@ type Client struct {
 	// part PUT. Shared across all concurrent parts so the total throughput
 	// across the process stays under the cap. nil = unlimited.
 	uploadLimiter *rate.Limiter
+	deviceCookie  string // trusted-device cookie value (mist_device)
 }
+
+func (c *Client) SetDeviceCookie(cookie string) { c.deviceCookie = cookie }
 
 // SetUploadRateKBps installs / replaces the shared upload rate limiter.
 // Pass 0 to disable (unlimited).
@@ -117,13 +120,20 @@ func (c *Client) Health() (HealthResponse, error) {
 }
 
 type loginReq struct {
-	Login         string `json:"login"`
-	Password      string `json:"password"`
-	ClientVersion string `json:"clientVersion,omitempty"`
+	Login          string `json:"login"`
+	Password       string `json:"password"`
+	ClientVersion  string `json:"clientVersion,omitempty"`
+	TotpCode       string `json:"totpCode,omitempty"`
+	RememberDevice bool   `json:"rememberDevice,omitempty"`
 }
-type loginResp struct {
-	Token string     `json:"token"`
-	User  PublicUser `json:"user"`
+
+// LoginResult is the union returned by Login.
+// When TotpRequired is true, the other fields are zero — caller must re-call with a code.
+type LoginResult struct {
+	TotpRequired bool       `json:"totp_required,omitempty"`
+	Token        string     `json:"token,omitempty"`
+	User         PublicUser `json:"user"`
+	DeviceCookie string     `json:"-"` // extracted from Set-Cookie, not in body
 }
 
 // New builds a client against the given base URL. `insecureTLS` lets
@@ -163,6 +173,9 @@ func (c *Client) do(method, path string, body any, out any) error {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	if c.deviceCookie != "" {
+		req.Header.Set("Cookie", "mist_device="+c.deviceCookie)
+	}
 	res, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -178,16 +191,54 @@ func (c *Client) do(method, path string, body any, out any) error {
 	return nil
 }
 
-// Login exchanges credentials for a JWT + user. The returned token
-// should be persisted by the caller.
-func (c *Client) Login(login, password string) (string, PublicUser, error) {
-	var r loginResp
-	body := loginReq{Login: login, Password: password, ClientVersion: c.version}
-	if err := c.do("POST", "/auth/login", body, &r); err != nil {
-		return "", PublicUser{}, err
+// Login exchanges credentials for a JWT. Pass empty totpCode on first attempt;
+// if TotpRequired is true in the response, call again with the user's code.
+// rememberDevice=true causes the server to set a 30-day trusted-device cookie.
+func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (LoginResult, error) {
+	body, err := json.Marshal(loginReq{
+		Login: login, Password: password,
+		ClientVersion:  c.version,
+		TotpCode:       totpCode,
+		RememberDevice: rememberDevice,
+	})
+	if err != nil {
+		return LoginResult{}, err
+	}
+	req, err := http.NewRequest("POST", c.baseURL+"/auth/login", bytes.NewReader(body))
+	if err != nil {
+		return LoginResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client", "desktop")
+	req.Header.Set("User-Agent", "Mist Drive Desktop/"+c.version)
+	if c.deviceCookie != "" {
+		req.Header.Set("Cookie", "mist_device="+c.deviceCookie)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		msg, _ := io.ReadAll(res.Body)
+		return LoginResult{}, fmt.Errorf("%d: %s", res.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var r LoginResult
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		return LoginResult{}, err
+	}
+	if r.TotpRequired {
+		return r, nil
 	}
 	c.token = r.Token
-	return r.Token, r.User, nil
+	// Extract trusted-device cookie if server set one
+	for _, ck := range res.Cookies() {
+		if ck.Name == "mist_device" {
+			r.DeviceCookie = ck.Value
+			break
+		}
+	}
+	return r, nil
 }
 
 // Me returns the currently authenticated user. Used to verify a

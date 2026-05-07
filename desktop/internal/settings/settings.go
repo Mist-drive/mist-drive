@@ -34,12 +34,13 @@ type SyncFolder struct {
 
 // EnvSettings holds config that is specific to a single API endpoint.
 type EnvSettings struct {
-	JWT                  string       `json:"jwt"`
-	Login                string       `json:"login"`
-	RememberLogin        bool         `json:"rememberLogin"`
-	Folders              []SyncFolder `json:"folders"`
-	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
-	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
+	JWT                 string       `json:"jwt"`
+	Login               string       `json:"login"`
+	RememberLogin       bool         `json:"rememberLogin"`
+	TrustedDeviceCookie string       `json:"trustedDeviceCookie,omitempty"`
+	Folders             []SyncFolder `json:"folders"`
+	MaxConcurrentUploads int         `json:"maxConcurrentUploads"`
+	MaxUploadRateKBps    int         `json:"maxUploadRateKBps"`
 }
 
 func envDefaults() EnvSettings {
@@ -58,6 +59,7 @@ type Settings struct {
 	JWT                  string       `json:"jwt"`
 	Login                string       `json:"login"`
 	RememberLogin        bool         `json:"rememberLogin"`
+	TrustedDeviceCookie  string       `json:"trustedDeviceCookie,omitempty"`
 	Folders              []SyncFolder `json:"folders"`
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
@@ -212,6 +214,7 @@ func (st *Store) Get() Settings {
 		JWT:                  e.JWT,
 		Login:                e.Login,
 		RememberLogin:        e.RememberLogin,
+		TrustedDeviceCookie:  e.TrustedDeviceCookie,
 		Folders:              e.Folders,
 		MaxConcurrentUploads: e.MaxConcurrentUploads,
 		MaxUploadRateKBps:    e.MaxUploadRateKBps,
@@ -243,6 +246,7 @@ func (st *Store) Save(s Settings) error {
 	e.JWT = s.JWT
 	e.Login = s.Login
 	e.RememberLogin = s.RememberLogin
+	e.TrustedDeviceCookie = s.TrustedDeviceCookie
 	e.Folders = s.Folders
 	e.MaxConcurrentUploads = s.MaxConcurrentUploads
 	e.MaxUploadRateKBps = s.MaxUploadRateKBps

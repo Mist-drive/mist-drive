@@ -9,6 +9,20 @@ export type PublicUser = {
   role: 'user' | 'admin'
   quotaBytes: number
   usedBytes: number
+  totpEnabled: boolean
+}
+
+export type PublicDevice = {
+  id: string
+  label: string
+  createdAt: string
+  expiresAt: string
+}
+
+export type LoginRecord = {
+  ip: string
+  userAgent?: string
+  at: string
 }
 
 export type ObjectInfo = {
@@ -144,12 +158,58 @@ export async function fetchHealth(): Promise<{ version: string; features: Featur
   }
 }
 
+export type LoginResult =
+  | { totp_required: true }
+  | { token: string; user: PublicUser }
+
 export const api = {
-  login: (login: string, password: string) =>
-    req<{ token: string; user: PublicUser }>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ login, password }),
-    }),
+  login: async (login: string, password: string, totpCode?: string, rememberDevice?: boolean): Promise<LoginResult> => {
+    const headers = new Headers({ 'Content-Type': 'application/json', 'X-Client': 'web' })
+    startLoading()
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          login,
+          password,
+          ...(totpCode ? { totpCode } : {}),
+          ...(rememberDevice ? { rememberDevice } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`${res.status}: ${text || res.statusText}`)
+      }
+      return res.json() as Promise<LoginResult>
+    } finally {
+      endLoading()
+    }
+  },
+  totp: {
+    setup: () => req<{ secret: string; uri: string }>('/api/totp/setup'),
+    enable: (secret: string, code: string) =>
+      req<{ backupCodes: string[] }>('/api/totp/enable', {
+        method: 'POST',
+        body: JSON.stringify({ secret, code }),
+      }),
+    disable: (password: string, code: string) =>
+      req<{ ok: boolean }>('/api/totp/disable', {
+        method: 'DELETE',
+        body: JSON.stringify({ password, code }),
+      }),
+    regenBackup: (code: string) =>
+      req<{ backupCodes: string[] }>('/api/totp/regen-backup', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
+  },
+  devices: {
+    list: () => req<PublicDevice[]>('/api/devices'),
+    revoke: (id: string) => req<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    revokeAll: () => req<{ ok: boolean }>('/api/devices', { method: 'DELETE' }),
+  },
+  loginHistory: () => req<LoginRecord[]>('/api/login-history'),
   me: () => req<PublicUser>('/api/me'),
   listFiles: (prefix = '') =>
     req<ListResponse>(`/api/files?prefix=${encodeURIComponent(prefix)}`),

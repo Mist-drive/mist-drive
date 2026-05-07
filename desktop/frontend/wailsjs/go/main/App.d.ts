@@ -31,7 +31,7 @@ export function ListEnvironments():Promise<Array<string>>;
 
 export function ListFiles():Promise<apiclient.ListResponse>;
 
-export function Login(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<apiclient.PublicUser>;
+export function Login(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:boolean):Promise<main.LoginResponse>;
 
 export function Logout():Promise<void>;
 

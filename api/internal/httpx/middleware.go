@@ -1,11 +1,15 @@
 package httpx
 
 import (
+	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/yann/mist-drive/api/internal/auth"
+	"github.com/yann/mist-drive/api/internal/logger"
 )
 
 type ctxKey string
@@ -15,7 +19,12 @@ const (
 	CtxRole ctxKey = "role"
 )
 
-func AuthMiddleware(secret string, bootTime time.Time) fiber.Handler {
+func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber.Handler {
+	warn := func(msg string, args ...any) {
+		if log != nil {
+			log.LogAttrs(slog.LevelWarn, msg, args...)
+		}
+	}
 	return func(c *fiber.Ctx) error {
 		// Prefer the Authorization header. Fall back to a `token` query
 		// param so the browser can point `window.location` at streaming
@@ -32,6 +41,16 @@ func AuthMiddleware(secret string, bootTime time.Time) fiber.Handler {
 		}
 		claims, err := auth.Parse(secret, tok)
 		if err != nil {
+			switch {
+			case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+				warn("auth: token with invalid signature", "ip", c.IP(), "ua", c.Get("User-Agent"), "path", c.Path())
+			case errors.Is(err, jwt.ErrTokenUnverifiable):
+				// ErrTokenUnverifiable wraps our "bad alg" keyfunc error — algorithm confusion attempt.
+				warn("auth: token with bad algorithm", "ip", c.IP(), "ua", c.Get("User-Agent"), "path", c.Path())
+			case errors.Is(err, jwt.ErrTokenMalformed):
+				warn("auth: malformed token", "ip", c.IP(), "ua", c.Get("User-Agent"), "path", c.Path())
+			// ErrTokenExpired is normal — user just needs to re-login, no warn.
+			}
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid token")
 		}
 		// Reject tokens issued before this server instance started.

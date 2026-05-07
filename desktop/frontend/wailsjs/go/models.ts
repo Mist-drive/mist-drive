@@ -118,6 +118,38 @@ export namespace main {
 	        this.size = source["size"];
 	    }
 	}
+	export class LoginResponse {
+	    totp_required: boolean;
+	    user: apiclient.PublicUser;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoginResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totp_required = source["totp_required"];
+	        this.user = this.convertValues(source["user"], apiclient.PublicUser);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -148,6 +180,7 @@ export namespace settings {
 	    jwt: string;
 	    login: string;
 	    rememberLogin: boolean;
+	    trustedDeviceCookie?: string;
 	    folders: SyncFolder[];
 	    maxConcurrentUploads: number;
 	    maxUploadRateKBps: number;
@@ -164,6 +197,7 @@ export namespace settings {
 	        this.jwt = source["jwt"];
 	        this.login = source["login"];
 	        this.rememberLogin = source["rememberLogin"];
+	        this.trustedDeviceCookie = source["trustedDeviceCookie"];
 	        this.folders = this.convertValues(source["folders"], SyncFolder);
 	        this.maxConcurrentUploads = source["maxConcurrentUploads"];
 	        this.maxUploadRateKBps = source["maxUploadRateKBps"];

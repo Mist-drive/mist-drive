@@ -20,10 +20,10 @@ func newMiddlewareApp(secret string) *fiber.App {
 
 func newMiddlewareAppWithBoot(secret string, bootTime time.Time) *fiber.App {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Get("/protected", httpx.AuthMiddleware(secret, bootTime), func(c *fiber.Ctx) error {
+	app.Get("/protected", httpx.AuthMiddleware(secret, bootTime, nil), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true, "uid": httpx.UID(c)})
 	})
-	app.Get("/admin", httpx.AuthMiddleware(secret, bootTime), httpx.AdminOnly, func(c *fiber.Ctx) error {
+	app.Get("/admin", httpx.AuthMiddleware(secret, bootTime, nil), httpx.AdminOnly, func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true})
 	})
 	return app

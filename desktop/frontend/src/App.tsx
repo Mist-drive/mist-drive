@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GetFeatures, Login, Logout, Me } from '../wailsjs/go/main/App'
+import { GetFeatures, Logout, Me } from '../wailsjs/go/main/App'
 import { apiclient } from '../wailsjs/go/models'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from '@shared/components/LoadingBar'
@@ -40,15 +40,7 @@ export default function App() {
       </div>
       {!user ? (
         <LoginScreen
-          onLogin={async (url, login, password, rememberLogin) => {
-            startLoading()
-            try {
-              const u = await Login(url, login, password, rememberLogin)
-              setUser(u)
-              GetFeatures().then(setFeatures).catch(() => {})
-            }
-            finally { endLoading() }
-          }}
+          onLogin={(u) => { setUser(u); GetFeatures().then(setFeatures).catch(() => {}) }}
         />
       ) : (
         <Home

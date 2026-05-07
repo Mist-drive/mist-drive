@@ -61,6 +61,9 @@ func NewApp(ver string) *App {
 	s := st.Get()
 	api := apiclient.New(s.APIURL, s.JWT, ver, true)
 	api.SetUploadRateKBps(s.MaxUploadRateKBps)
+	if s.TrustedDeviceCookie != "" {
+		api.SetDeviceCookie(s.TrustedDeviceCookie)
+	}
 	a := &App{
 		version: ver,
 		settings: st,
@@ -128,33 +131,44 @@ func (a *App) SaveSettings(s settings.Settings) error {
 
 // --- Auth ---
 
+// LoginResponse is returned by Login. TotpRequired true means the server
+// needs a TOTP code — the frontend should re-submit with the user's code.
+type LoginResponse struct {
+	TotpRequired bool                 `json:"totp_required"`
+	User         apiclient.PublicUser `json:"user"`
+}
+
 // Login authenticates against the API and stores the resulting JWT in
-// settings on success. Returns the PublicUser so the frontend can show
-// "connected as ..." without a second round-trip.
-func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclient.PublicUser, error) {
-	// Build a fresh client against the URL the user just typed —
-	// that way a login attempt with a new host doesn't require a
-	// separate "save settings" step first.
+// settings on success. Returns LoginResponse so the frontend can handle
+// the two-step TOTP flow: first call with empty totpCode, then re-call
+// with the code when TotpRequired is true.
+func (a *App) Login(apiURL, login, password, totpCode string, rememberLogin, rememberDevice bool) (LoginResponse, error) {
 	cli := apiclient.New(apiURL, "", a.version, true)
-	token, user, err := cli.Login(login, password)
+	// Restore stored device cookie so the server can skip TOTP for trusted devices.
+	if s := a.settings.Get(); s.TrustedDeviceCookie != "" {
+		cli.SetDeviceCookie(s.TrustedDeviceCookie)
+	}
+	result, err := cli.Login(login, password, totpCode, rememberDevice)
 	if err != nil {
-		return apiclient.PublicUser{}, err
+		return LoginResponse{}, err
+	}
+	if result.TotpRequired {
+		return LoginResponse{TotpRequired: true}, nil
 	}
 	s := a.settings.Get()
 	s.APIURL = apiURL
-	s.JWT = token
-	s.Login = user.Login
+	s.JWT = result.Token
+	s.Login = result.User.Login
 	s.RememberLogin = rememberLogin
+	s.TrustedDeviceCookie = result.DeviceCookie
 	if err := a.settings.Save(s); err != nil {
-		return apiclient.PublicUser{}, err
+		return LoginResponse{}, err
 	}
-	a.api = apiclient.New(apiURL, token, a.version, true)
+	a.api = apiclient.New(apiURL, result.Token, a.version, true)
+	a.api.SetDeviceCookie(result.DeviceCookie)
 	a.api.SetUploadRateKBps(s.MaxUploadRateKBps)
-	a.ws.Start(apiURL, token)
+	a.ws.Start(apiURL, result.Token)
 	// Bounce the engine so it picks up the fresh API client and token.
-	// A plain Start() is a no-op if the old loop is still running (or
-	// exited without clearing cancel), so we stop first. SetAPI swaps
-	// the client ref so reconcile uses the new token.
 	a.engine.Stop()
 	a.engine.SetAPI(a.api)
 	a.engine.ClearStatus()
@@ -162,7 +176,7 @@ func (a *App) Login(apiURL, login, password string, rememberLogin bool) (apiclie
 	if h, herr := a.api.Health(); herr == nil {
 		a.features = h.Features
 	}
-	return user, nil
+	return LoginResponse{User: result.User}, nil
 }
 
 // ShowWindow restores the main window from tray. Uses WindowShow to

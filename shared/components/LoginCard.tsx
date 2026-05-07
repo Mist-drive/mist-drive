@@ -5,6 +5,8 @@ import { useTranslation } from '@shared/lib/i18n'
 type Props = {
   version?: string
   serverSlot?: ReactNode
+  totpSlot?: ReactNode
+  submitLabel?: string
   login: string
   onLoginChange: (v: string) => void
   password: string
@@ -20,6 +22,8 @@ type Props = {
 export default function LoginCard({
   version,
   serverSlot,
+  totpSlot,
+  submitLabel,
   login,
   onLoginChange,
   password,
@@ -48,6 +52,7 @@ export default function LoginCard({
         <input value={login} onChange={e => onLoginChange(e.target.value)} autoFocus={!serverSlot} />
         <label>{t('login.password')}</label>
         <input type="password" value={password} onChange={e => onPasswordChange(e.target.value)} />
+        {totpSlot}
         {err && <p className="error">{err}</p>}
         <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '.5rem', cursor: 'pointer', marginTop: '.4rem' }}>
           <input
@@ -59,7 +64,7 @@ export default function LoginCard({
           {t('login.rememberMe')}
         </label>
         <button type="submit" disabled={busy || submitDisabled} style={{ marginTop: '1.4rem', width: '100%' }}>
-          {busy ? t('login.signingIn') : t('login.signIn')}
+          {submitLabel ?? (busy ? t('login.signingIn') : t('login.signIn'))}
         </button>
       </form>
     </div>

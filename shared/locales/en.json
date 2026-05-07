@@ -15,11 +15,6 @@
     "pickingFolder": "Picking folder …",
     "savedTo": "Saved to {{path}}"
   },
-  "nav": {
-    "files": "Files",
-    "admin": "Admin",
-    "logout": "Logout"
-  },
   "files": {
     "newFolder": "New folder",
     "uploadFile": "Upload file",
@@ -90,7 +85,45 @@
     "password": "Password",
     "rememberMe": "Remember me",
     "signIn": "Sign in",
-    "signingIn": "Signing in…"
+    "signingIn": "Signing in…",
+    "totpCode": "Authenticator code",
+    "totpCodePlaceholder": "6-digit code",
+    "verifying": "Verifying…",
+    "rememberTotpDevice": "Don't ask again on this device for 30 days"
+  },
+  "settings": {
+    "title": "Settings",
+    "security": "Security",
+    "totp": "Two-factor authentication (TOTP)",
+    "totpEnabled": "Enabled",
+    "totpDisabled": "Disabled",
+    "enableTotp": "Enable 2FA",
+    "disableTotp": "Disable 2FA",
+    "regenBackup": "Regenerate backup codes",
+    "scanQr": "Scan this QR code with your authenticator app",
+    "manualSecret": "Or enter manually:",
+    "enterCodeToConfirm": "Enter the 6-digit code from your app to confirm",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "backupCodesTitle": "Backup codes",
+    "backupCodesHint": "Save these codes somewhere safe. Each can only be used once.",
+    "done": "Done",
+    "enterTotpToDisable": "Enter your TOTP code (or a backup code) to disable 2FA",
+    "enterTotpToRegen": "Enter your TOTP code to regenerate backup codes",
+    "trustedDevices": "Trusted devices",
+    "noDevices": "No trusted devices.",
+    "unknownDevice": "Unknown device",
+    "deviceExpires": "Expires {{date}}",
+    "revokeDevice": "Revoke",
+    "revokeAll": "Revoke all",
+    "loginHistory": "Login history",
+    "noLoginHistory": "No login records yet."
+  },
+  "nav": {
+    "files": "Files",
+    "settings": "Settings",
+    "admin": "Admin",
+    "logout": "Logout"
   },
   "admin": {
     "createUser": "Create user",

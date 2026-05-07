@@ -57,7 +57,13 @@ func main() {
 
 	go gcStaleUploads(cfg, uploadStore, s3c, appLog.With("component", "upload-gc"))
 
-	app := fiber.New(fiber.Config{AppName: "mist-drive", DisableStartupMessage: true})
+	app := fiber.New(fiber.Config{
+		AppName:               "mist-drive",
+		DisableStartupMessage: true,
+		// Trust X-Forwarded-For set by Traefik so c.IP() returns the real
+		// client IP rather than the Traefik container IP.
+		ProxyHeader: fiber.HeaderXForwardedFor,
+	})
 	app.Use(recover.New())
 	// CORS is intentionally not configured: the SPA is served from the
 	// same origin as the API (see webui.Mount below), so cross-origin
@@ -92,6 +98,7 @@ func main() {
 		Uploads:      uploadStore,
 		Reservations: quota.New(),
 		Events:       events.NewHub(),
+		Log:          appLog.With("component", "auth"),
 		Version:      Version,
 		Features:     features.Current(),
 	}

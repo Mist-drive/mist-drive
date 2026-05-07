@@ -29,7 +29,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 ### API (`api/`)
 
 - **Entrypoint**: `cmd/server/main.go` — boots config, stores, S3 client, bootstraps admin user, starts upload GC goroutine, mounts routes + embedded SPA.
-- **`internal/httpx/`** — HTTP layer. `Server` struct holds all deps. Route registration in `handlers.go`, handlers split by concern: `handlers_auth.go`, `handlers_files.go`, `handlers_upload.go`, `handlers_admin.go`, `handlers_ws.go`. `middleware.go` has JWT auth + admin guard.
+- **`internal/httpx/`** — HTTP layer. `Server` struct holds all deps. Route registration in `handlers.go`, handlers split by concern: `handlers_auth.go`, `handlers_files.go`, `handlers_upload.go`, `handlers_admin.go`, `handlers_ws.go`, `handlers_totp.go`, `handlers_devices.go`. `middleware.go` has JWT auth + admin guard.
 - **`internal/users/`** — JSON-file-backed user store with in-memory index + `flock` for disk writes. No database.
 - **`internal/uploads/`** — Multipart upload state persistence (also JSON files). `gc.go` reclaims stale uploads.
 - **`internal/s3x/`** — MinIO/S3 client wrapper (presigned URLs, bucket ops).
@@ -46,7 +46,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 - `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client. `fetchHealth()` hits `/health` unauthenticated and returns `{version, features}`. 401 responses auto-redirect to `/login` after clearing the session.
 - `src/lib/uploader.ts` — multipart upload with presigned URLs, 8 MiB parts, 4 concurrent PUT workers, abort support.
 - `src/i18n.ts` — i18next init with HTTP backend; loads `/locales/{{lng}}.json` at runtime (not bundled). `web/public/locales` is a symlink → `../../shared/locales`; Vite copies it into `dist/locales/` at build time so the Go embed picks it up.
-- Pages: `Login.tsx`, `Files.tsx`, `Admin.tsx`.
+- Pages: `Login.tsx`, `Files.tsx`, `Admin.tsx`, `Settings.tsx`.
 
 ### Desktop (`desktop/`)
 
@@ -80,6 +80,10 @@ Wails bindings regen: `cd desktop && wails generate module`
 - **i18n** (`shared/locales/en.json`): single source of truth for all UI strings. Web lazy-loads via HTTP (`/locales/en.json`); desktop bundles statically via `import en from '@shared/locales/en.json'`. Both Vite configs set `resolve.dedupe: ['i18next', 'react-i18next']` to prevent dual-instance issues when resolving through the `@shared` alias. `shared/lib/i18n.ts` re-exports `useTranslation`/`Trans` — shared components always import from there, never directly from `react-i18next`. Run `python3 check_i18n.py` from repo root to audit missing/unused keys.
 - **Data dirs**: `DATA_DIR` defaults to `./data` (relative to where the binary runs). In dev (`make api-dev`), `api/.env` sets `DATA_DIR=../data/api` so data lands in `data/api/` at the repo root, not inside `api/`. Docker uses the default `./data` which resolves to `/app/data` inside the container (WORKDIR `/app`). `LOG_PATH` follows the same pattern.
 - **`api-dev` env**: `DATA_DIR` and `LOG_PATH` are written into `api/.env` on first run by the Makefile and sourced via `set -a && . ./.env`. The `.air.toml` `[env]` section is unreliable across air versions — env vars go in `.env` instead.
+- **Trusted device tokens**: cookie value is `{uuid}:{32-byte-hex}`; server stores `SHA-256({32-byte-hex})` — never the plain token. Lookup: split on `:`, find device by UUID, hash the token half, compare. `pruneExpiredDevices` called on every registration to keep the slice clean. Cookie is httpOnly + SameSite=Strict, 30-day MaxAge.
+- **Login history**: `User.LoginHistory []LoginRecord` — up to 10 most-recent successful logins (newest first), each storing IP + User-Agent + timestamp. Appended in `login()` after token is issued; `AppendLoginRecord` prepends and trims to 10. `GET /api/login-history` returns it read-only. Backup-code removal is persisted with an immediate `Users.Update` before the final write so a crash can't allow replay.
+- **Real client IP**: `fiber.Config{ProxyHeader: fiber.HeaderXForwardedFor}` in `main.go` so `c.IP()` reads from Traefik's `X-Forwarded-For` header. **Known limitation**: Traefik appends but doesn't strip client-supplied XFF by default, so a crafty client can spoof the first value. For the current use (security logs + login history display) this is cosmetic. To harden: configure `forwardedHeaders.trustedIPs` in Traefik so it replaces rather than appends.
+- **Desktop trusted device cookie**: `apiclient.Client` stores `deviceCookie` and sends it on every request via `do()`. The `Login` method builds its own raw HTTP request (not via `do()`) so it must set the `Cookie` header explicitly. On login, `app.go` seeds the fresh `cli` with the stored cookie from settings before calling `Login`.
 
 ## Roadmap
 
@@ -92,9 +96,11 @@ Wails bindings regen: `cd desktop && wails generate module`
 ### Larger features
 - **Share links** — time-limited presigned URLs for files without requiring login
 - **Desktop notifications** — surface sync engine events (upload complete, errors) as OS notifications
-- **2FA / TOTP** — auth hardening beyond password-only JWT flow
 
 ### Done
+- ~~**Login history**~~ — `User.LoginHistory []LoginRecord` (IP + User-Agent + timestamp, last 10, newest first); recorded on every successful login; `GET /api/login-history` endpoint; web Settings page shows it read-only; `AppendLoginRecord` truncates UA at 120 runes
+- ~~**2FA / TOTP**~~ — `handlers_totp.go`: setup/enable/disable/regen-backup endpoints; `verifyTOTP` checks live code + bcrypt-hashed backup codes (one-time use, consumed on verify); login two-step flow: password-only first call returns `{totp_required: true}`, second call sends `totpCode`; disabling clears secret + backup codes + trusted devices; web: Settings page with QR scan, confirm, backup codes display, disable flow
+- ~~**Trusted devices (remember this device 30 days)**~~ — cookie `mist_device={id}:{plainToken}`; server stores SHA-256 hash in `user.TrustedDevices[]`; valid cookie skips TOTP on login entirely; "Don't ask again on this device for 30 days" checkbox shown on TOTP step; Settings page lists active devices (label from User-Agent, expiry date) with per-device and revoke-all buttons; expired devices pruned on registration; devices wiped when TOTP is disabled; `GET /api/devices`, `DELETE /api/devices`, `DELETE /api/devices/:id`
 - ~~**File preview**~~ — `GET /api/files/preview?key=`; images resized to 800px JPEG (72% quality), text first 4KB, binary placeholder; web: right-side sliding panel; desktop: modal popup; `X-Preview-Type` response header drives rendering in shared `PreviewContent` component
 - ~~**Create folder**~~ — `.keep` marker file in S3; filtered in `buildTree`, API returns all objects (web + desktop)
 - ~~**"Remember me" on web**~~ — always localStorage; checkbox persists across logout; desktop mirrors via settings JSON

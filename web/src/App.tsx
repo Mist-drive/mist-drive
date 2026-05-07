@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { clearSession, getUser, fetchHealth, defaultFeatures } from './lib/api'
+import { clearSession, getUser, fetchHealth } from './lib/api'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import LoadingBar from './components/LoadingBar'
 import Logo from '@shared/components/Logo'
 import Login from './pages/Login'
 import Files from './pages/Files'
 import Admin from './pages/Admin'
+import Settings from './pages/Settings'
 import { useTranslation } from '@shared/lib/i18n'
 
 function Background() {
@@ -33,6 +34,7 @@ function Nav({ version }: { version: string }) {
       {u.role === 'admin' && (
         <a href="/admin" style={loc.pathname.startsWith('/admin') ? activeStyle : undefined}>{t('nav.admin')}</a>
       )}
+      <a href="/settings" style={loc.pathname.startsWith('/settings') ? activeStyle : undefined}>{t('nav.settings')}</a>
       <div className="spacer" />
       <span className="muted">{u.login}</span>
       <button className="ghost" onClick={() => { clearSession(); nav('/login') }}>{t('nav.logout')}</button>
@@ -47,11 +49,9 @@ function Protected({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const [version, setVersion] = useState('')
-  const [features, setFeatures] = useState(defaultFeatures)
   useEffect(() => {
-    fetchHealth().then(h => { setVersion(h.version); setFeatures(h.features) })
+    fetchHealth().then(h => setVersion(h.version))
   }, [])
-  console.log('[features]', features)
   return (
     <ConfirmProvider>
       <div className="app">
@@ -63,6 +63,7 @@ export default function App() {
             <Route path="/login" element={<Login version={version || undefined} />} />
             <Route path="/files" element={<Protected><Files /></Protected>} />
             <Route path="/admin" element={<Protected><Admin /></Protected>} />
+            <Route path="/settings" element={<Protected><Settings /></Protected>} />
             <Route path="*" element={<Navigate to="/files" replace />} />
           </Routes>
         </div>
