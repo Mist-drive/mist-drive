@@ -15,6 +15,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/features"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/logger"
+	"github.com/yann/mist-drive/api/internal/notify"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -101,6 +102,7 @@ func main() {
 		Log:          appLog.With("component", "auth"),
 		Version:      Version,
 		Features:     features.Current(),
+		Mailer:       notify.New(*cfg),
 	}
 	srv.Register(app)
 

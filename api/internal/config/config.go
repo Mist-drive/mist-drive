@@ -26,6 +26,13 @@ type Config struct {
 	ServiceName     string
 	PresignDownload time.Duration
 	MaxZipBytes     int64
+	SMTPHost        string
+	SMTPPort        int
+	SMTPUser        string
+	SMTPPassword    string
+	SMTPFrom        string
+	SMTPTLS         string
+	PublicURL       string // e.g. https://drive.example.com — used in email links
 }
 
 // minJWTSecretLen is the shortest JWT secret we accept.
@@ -57,6 +64,13 @@ func Load() *Config {
 		ServiceName:     env("SERVICE_NAME", "mist-drive-api"),
 		PresignDownload: duration("PRESIGN_DOWNLOAD_TTL", 5*time.Minute),
 		MaxZipBytes:     int64(intEnv("MAX_ZIP_BYTES", 20*1024*1024*1024)), // 20 GiB
+		SMTPHost:        env("SMTP_HOST", ""),
+		SMTPPort:        intEnv("SMTP_PORT", 587),
+		SMTPUser:        env("SMTP_USER", ""),
+		SMTPPassword:    env("SMTP_PASSWORD", ""),
+		SMTPFrom:        env("SMTP_FROM", ""),
+		SMTPTLS:         env("SMTP_TLS", "starttls"),
+		PublicURL:       env("PUBLIC_URL", ""),
 	}
 	return c
 }

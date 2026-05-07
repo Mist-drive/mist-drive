@@ -11,6 +11,7 @@ import (
 type Claims struct {
 	UID  string `json:"uid"`
 	Role string `json:"role"`
+	Ver  int64  `json:"ver,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -23,10 +24,11 @@ func VerifyPassword(hash, pw string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
 
-func Issue(secret, uid, role string, ttl time.Duration) (string, error) {
+func Issue(secret, uid, role string, ver int64, ttl time.Duration) (string, error) {
 	c := Claims{
 		UID:  uid,
 		Role: role,
+		Ver:  ver,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

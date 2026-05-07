@@ -13,6 +13,7 @@ type createUserReq struct {
 	Login      string `json:"login"`
 	Password   string `json:"password"`
 	QuotaBytes int64  `json:"quotaBytes"`
+	Email      string `json:"email,omitempty"`
 }
 
 type patchQuotaReq struct {
@@ -45,6 +46,7 @@ func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 		ID: id, Login: r.Login, BcryptPwd: hash,
 		QuotaBytes: r.QuotaBytes,
 		Role:       users.RoleUser, CreatedAt: time.Now(),
+		Email: r.Email,
 	}
 	if err := s.S3.EnsureBucket(c.Context(), u.Bucket()); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())

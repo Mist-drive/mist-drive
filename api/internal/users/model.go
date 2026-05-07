@@ -40,6 +40,8 @@ type User struct {
 	UsedBytes       int64           `json:"usedBytes"`
 	Role            Role            `json:"role"`
 	CreatedAt       time.Time       `json:"createdAt"`
+	Email           string          `json:"email,omitempty"`
+	TokenVersion    int64           `json:"tokenVersion,omitempty"`
 	TOTPSecret      string          `json:"totpSecret,omitempty"`
 	TOTPEnabled     bool            `json:"totpEnabled"`
 	TOTPBackupCodes []string        `json:"totpBackupCodes,omitempty"`
@@ -83,12 +85,13 @@ type PublicUser struct {
 	ReservedBytes int64  `json:"reservedBytes,omitempty"`
 	DiskFreeBytes int64  `json:"diskFreeBytes,omitempty"`
 	TOTPEnabled   bool   `json:"totpEnabled"`
+	Email         string `json:"email,omitempty"`
 }
 
 func (u *User) Public() PublicUser {
 	return PublicUser{
 		ID: u.ID, Login: u.Login, Role: u.Role,
 		QuotaBytes: u.QuotaBytes, UsedBytes: u.UsedBytes,
-		TOTPEnabled: u.TOTPEnabled,
+		TOTPEnabled: u.TOTPEnabled, Email: u.Email,
 	}
 }

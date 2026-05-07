@@ -143,7 +143,7 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	srv.Register(app)
 
-	tok, err := auth.Issue(cfg.JWTSecret, u.ID, string(u.Role), cfg.JWTTTL)
+	tok, err := auth.Issue(cfg.JWTSecret, u.ID, string(u.Role), 0, cfg.JWTTTL)
 	if err != nil {
 		t.Fatal(err)
 	}

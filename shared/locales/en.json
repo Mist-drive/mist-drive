@@ -121,7 +121,17 @@
     "revokeAllConfirmTitle": "Revoke all trusted devices?",
     "revokeAllConfirmMessage": "All trusted devices will be removed and TOTP will be required on next login for each one.",
     "loginHistory": "Login history",
-    "noLoginHistory": "No login records yet."
+    "noLoginHistory": "No login records yet.",
+    "notificationEmail": "Notification email",
+    "emailPlaceholder": "your@email.com",
+    "emailSaved": "Email saved.",
+    "changePassword": "Change password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "passwordChanged": "Password changed.",
+    "logoutAll": "Log out all sessions",
+    "logoutAllConfirmTitle": "Log out all sessions?",
+    "logoutAllConfirmMessage": "All active sessions will be invalidated. You will be redirected to the login page."
   },
   "nav": {
     "files": "Files",

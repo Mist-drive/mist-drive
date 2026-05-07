@@ -11,7 +11,7 @@ import (
 const testSecret = "test-secret-32bytesxxxxxxxxxx!!"
 
 func TestAuth_IssueAndParse(t *testing.T) {
-	tok, err := auth.Issue(testSecret, "uid1", "admin", time.Hour)
+	tok, err := auth.Issue(testSecret, "uid1", "admin", 0, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestAuth_IssueAndParse(t *testing.T) {
 }
 
 func TestAuth_ParseWrongSecret(t *testing.T) {
-	tok, err := auth.Issue(testSecret, "uid1", "user", time.Hour)
+	tok, err := auth.Issue(testSecret, "uid1", "user", 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestAuth_ParseWrongSecret(t *testing.T) {
 }
 
 func TestAuth_ParseExpired(t *testing.T) {
-	tok, err := auth.Issue(testSecret, "uid1", "user", -time.Second)
+	tok, err := auth.Issue(testSecret, "uid1", "user", 0, -time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestAuth_ParseExpired(t *testing.T) {
 }
 
 func TestAuth_ParseTamperedSignature(t *testing.T) {
-	tok, err := auth.Issue(testSecret, "uid1", "user", time.Hour)
+	tok, err := auth.Issue(testSecret, "uid1", "user", 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

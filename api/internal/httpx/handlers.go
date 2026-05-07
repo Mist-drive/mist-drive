@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -23,6 +24,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/features"
 	"github.com/yann/mist-drive/api/internal/logger"
+	"github.com/yann/mist-drive/api/internal/notify"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -39,6 +41,8 @@ type Server struct {
 	Log          *logger.Logger
 	Version      string
 	Features     features.Features
+	Mailer       *notify.Mailer
+	failedLogins sync.Map // login string → *atomic.Int64
 	procMu       sync.RWMutex
 	processing   map[string]map[string]bool // userID → processing path prefixes
 }
@@ -48,6 +52,27 @@ type Server struct {
 func (s *Server) secWarn(msg string, args ...any) {
 	if s.Log != nil {
 		s.Log.LogAttrs(slog.LevelWarn, msg, args...)
+	}
+}
+
+func (s *Server) incFailed(login string) int64 {
+	v, _ := s.failedLogins.LoadOrStore(login, new(atomic.Int64))
+	return v.(*atomic.Int64).Add(1)
+}
+
+func (s *Server) resetFailed(login string) {
+	if v, ok := s.failedLogins.Load(login); ok {
+		v.(*atomic.Int64).Store(0)
+	}
+}
+
+func (s *Server) TokenVersionMiddleware() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		u, err := s.Users.GetByID(UID(c))
+		if err != nil || tokenVer(c) < u.TokenVersion {
+			return fiber.NewError(fiber.StatusUnauthorized, "session revoked, please log in again")
+		}
+		return c.Next()
 	}
 }
 
@@ -66,9 +91,12 @@ func (s *Server) Register(app *fiber.App) {
 	})
 	app.Post("/auth/login", s.login)
 
-	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime, s.Log))
+	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime, s.Log), s.TokenVersionMiddleware())
 	api.Get("/me", s.me)
 	api.Get("/login-history", s.loginHistory)
+	api.Put("/me/email", s.updateEmail)
+	api.Put("/me/password", s.changePassword)
+	api.Post("/me/logout-all", s.logoutAll)
 
 	files := api.Group("/files")
 	files.Get("/", s.listFiles)

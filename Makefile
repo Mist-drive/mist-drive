@@ -26,7 +26,12 @@ api-dev: install-data ## run api with air hot-reload (starts minio via docker co
 	@grep -q "^ADMIN_PASSWORD=" api/.env || (echo "ADMIN_PASSWORD=admin" >> api/.env && echo "appended ADMIN_PASSWORD=admin to api/.env")
 	@grep -q "^DATA_DIR=" api/.env || echo "DATA_DIR=../data/api" >> api/.env
 	@grep -q "^LOG_PATH=" api/.env || echo "LOG_PATH=../data/api/logs/app.log" >> api/.env
-	docker compose up -d --wait minio
+	@grep -q "^SMTP_HOST=" api/.env || echo "SMTP_HOST=localhost" >> api/.env
+	@grep -q "^SMTP_PORT=" api/.env || echo "SMTP_PORT=1025" >> api/.env
+	@grep -q "^SMTP_TLS=" api/.env || echo "SMTP_TLS=none" >> api/.env
+	@grep -q "^SMTP_FROM=" api/.env || echo "SMTP_FROM=noreply@mist-drive.local" >> api/.env
+	@grep -q "^PUBLIC_URL=" api/.env || echo "PUBLIC_URL=http://localhost:3000" >> api/.env
+	docker compose up -d --wait minio mailpit
 	cd api && set -a && . ./.env && set +a && air || go run ./cmd/server
 
 ui-dev: ## run web vite dev server

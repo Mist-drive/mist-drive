@@ -1,7 +1,10 @@
 package httpx
 
 import (
+	"log/slog"
+	"net"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yann/mist-drive/api/internal/auth"
@@ -33,11 +36,25 @@ func (s *Server) login(c *fiber.Ctx) error {
 	}
 	u, err := s.Users.GetByLogin(r.Login)
 	if err != nil {
-		s.secWarn("auth: unknown user", "ip", c.IP(), "login", r.Login, "ua", c.Get("User-Agent"))
+		s.secWarn("auth: unknown user", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 	}
 	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
-		s.secWarn("auth: wrong password", "ip", c.IP(), "login", r.Login, "ua", c.Get("User-Agent"))
+		s.secWarn("auth: wrong password", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
+		count := s.incFailed(u.Login)
+		if s.Mailer != nil && s.Mailer.Enabled() && count%3 == 0 {
+			if admin, err2 := s.Users.GetByLogin(s.Cfg.AdminLogin); err2 == nil && admin.Email != "" {
+				ip, ua, login, to := clientIP(c), c.Get("User-Agent"), r.Login, admin.Email
+				s.Log.LogAttrs(slog.LevelInfo, "email: sending failed-login alert", "login", login, "ip", ip, "count", count, "to", to)
+				go func() {
+					if err3 := s.Mailer.SendFailedLogin(to, login, ip, ua, count, time.Now()); err3 != nil {
+						s.secWarn("email: SendFailedLogin failed", "err", err3)
+					} else {
+						s.Log.LogAttrs(slog.LevelInfo, "email: failed-login alert sent", "login", login, "to", to)
+					}
+				}()
+			}
+		}
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 	}
 	if u.TOTPEnabled {
@@ -46,7 +63,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 			if ok, _ := validateDeviceCookie(cookie, u.TrustedDevices); ok {
 				skipTOTP = true
 			} else {
-				s.secWarn("auth: invalid device cookie", "ip", c.IP(), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
+				s.secWarn("auth: invalid device cookie", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 			}
 		}
 		if !skipTOTP {
@@ -55,11 +72,11 @@ func (s *Server) login(c *fiber.Ctx) error {
 			}
 			ok, backupConsumed := verifyTOTP(u, r.TOTPCode)
 			if !ok {
-				s.secWarn("auth: invalid TOTP code", "ip", c.IP(), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
+				s.secWarn("auth: invalid TOTP code", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 				return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
 			}
 			if backupConsumed {
-				s.secWarn("auth: backup code consumed", "ip", c.IP(), "uid", u.ID, "login", u.Login, "remaining", len(u.TOTPBackupCodes))
+				s.secWarn("auth: backup code consumed", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "remaining", len(u.TOTPBackupCodes))
 				_ = s.Users.Update(u) // persist code removal immediately — avoid replay if server crashes before final write
 			}
 			if r.RememberDevice {
@@ -67,10 +84,23 @@ func (s *Server) login(c *fiber.Ctx) error {
 			}
 		}
 	}
-	u.AppendLoginRecord(c.IP(), c.Get("User-Agent"))
+	newIP := isNewIP(clientIP(c), u.LoginHistory)
+	u.AppendLoginRecord(clientIP(c), c.Get("User-Agent"))
 	_ = s.Users.Update(u)
+	s.resetFailed(u.Login)
+	if s.Mailer != nil && s.Mailer.Enabled() && newIP && u.Email != "" {
+		ip, ua, uid, to := clientIP(c), c.Get("User-Agent"), u.ID, u.Email
+		s.Log.LogAttrs(slog.LevelInfo, "email: sending new-IP notification", "uid", uid, "ip", ip, "to", to)
+		go func() {
+			if err := s.Mailer.SendNewIP(to, ip, ua, time.Now()); err != nil {
+				s.secWarn("email: SendNewIP failed", "err", err)
+			} else {
+				s.Log.LogAttrs(slog.LevelInfo, "email: new-IP notification sent", "uid", uid, "to", to)
+			}
+		}()
+	}
 
-	tok, err := auth.Issue(s.Cfg.JWTSecret, u.ID, string(u.Role), s.Cfg.JWTTTL)
+	tok, err := auth.Issue(s.Cfg.JWTSecret, u.ID, string(u.Role), u.TokenVersion, s.Cfg.JWTTTL)
 	if err != nil {
 		return err
 	}
@@ -98,4 +128,134 @@ func (s *Server) me(c *fiber.Ctx) error {
 	p.ReservedBytes = s.Reservations.Get(u.ID)
 	p.DiskFreeBytes = quota.DiskFree(s.Cfg.DataDir)
 	return c.JSON(p)
+}
+
+// clientIP returns the best available client IP.
+// In production clientIP(c) reads X-Forwarded-For (set by Traefik via ProxyHeader config).
+// In local dev that header is absent, so we fall back to the raw TCP remote address.
+func clientIP(c *fiber.Ctx) string {
+	if ip := c.IP(); ip != "" {
+		return ip
+	}
+	if addr := c.Context().RemoteAddr(); addr != nil {
+		if host, _, err := net.SplitHostPort(addr.String()); err == nil && host != "" {
+			return host
+		}
+	}
+	return "unknown"
+}
+
+func isNewIP(ip string, history []users.LoginRecord) bool {
+	if len(history) == 0 {
+		return false
+	}
+	for _, r := range history {
+		if r.IP == ip {
+			return false
+		}
+	}
+	return true
+}
+
+type updateEmailReq struct {
+	Email string `json:"email"`
+}
+
+func (s *Server) updateEmail(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "user gone")
+	}
+	var r updateEmailReq
+	if err := c.BodyParser(&r); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "bad body")
+	}
+	if r.Email != "" && !strings.Contains(r.Email, "@") {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid email")
+	}
+	u.Email = r.Email
+	if err := s.Users.Update(u); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(u.Public())
+}
+
+type changePasswordReq struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+	TOTPCode        string `json:"totpCode,omitempty"`
+}
+
+func (s *Server) changePassword(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "user gone")
+	}
+	var r changePasswordReq
+	if err := c.BodyParser(&r); err != nil || r.CurrentPassword == "" || r.NewPassword == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "bad body")
+	}
+	if !auth.VerifyPassword(u.BcryptPwd, r.CurrentPassword) {
+		s.secWarn("change-password: wrong current password", "ip", clientIP(c), "uid", u.ID)
+		return fiber.NewError(fiber.StatusUnauthorized, "wrong current password")
+	}
+	if u.TOTPEnabled {
+		if r.TOTPCode == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "totp_required")
+		}
+		ok, backupConsumed := verifyTOTP(u, r.TOTPCode)
+		if !ok {
+			s.secWarn("change-password: invalid TOTP", "ip", clientIP(c), "uid", u.ID)
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
+		}
+		if backupConsumed {
+			_ = s.Users.Update(u)
+		}
+	}
+	hash, err := auth.HashPassword(r.NewPassword)
+	if err != nil {
+		return err
+	}
+	u.BcryptPwd = hash
+	if err := s.Users.Update(u); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+type logoutAllReq struct {
+	Password string `json:"password,omitempty"`
+	TOTPCode string `json:"totpCode,omitempty"`
+}
+
+func (s *Server) logoutAll(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "user gone")
+	}
+	var r logoutAllReq
+	_ = c.BodyParser(&r)
+	if u.TOTPEnabled {
+		if r.TOTPCode == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "totp_required")
+		}
+		ok, backupConsumed := verifyTOTP(u, r.TOTPCode)
+		if !ok {
+			s.secWarn("logout-all: invalid TOTP", "ip", clientIP(c), "uid", u.ID)
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
+		}
+		if backupConsumed {
+			_ = s.Users.Update(u)
+		}
+	} else {
+		if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+			s.secWarn("logout-all: wrong password", "ip", clientIP(c), "uid", u.ID)
+			return fiber.NewError(fiber.StatusUnauthorized, "wrong password")
+		}
+	}
+	u.TokenVersion++
+	if err := s.Users.Update(u); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(fiber.Map{"ok": true})
 }

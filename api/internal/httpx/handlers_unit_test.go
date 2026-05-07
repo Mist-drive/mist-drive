@@ -91,11 +91,11 @@ func newUnitFixture(t *testing.T) *unitFixture {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	srv.Register(app)
 
-	userTok, err := auth.Issue(unitSecret, alice.ID, string(alice.Role), time.Hour)
+	userTok, err := auth.Issue(unitSecret, alice.ID, string(alice.Role), 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminTok, err := auth.Issue(unitSecret, adminID, string(users.RoleAdmin), time.Hour)
+	adminTok, err := auth.Issue(unitSecret, adminID, string(users.RoleAdmin), 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,6 +300,157 @@ func TestAdminPatchQuota_NotFound(t *testing.T) {
 		map[string]any{"quotaBytes": 1024}, f.adminToken)
 	if resp.StatusCode != 404 {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+// ---- Update email ----
+
+func TestUpdateEmail_Success(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/email",
+		map[string]any{"email": "alice@example.com"}, f.userToken)
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Email != "alice@example.com" {
+		t.Fatalf("email: got %q want %q", out.Email, "alice@example.com")
+	}
+}
+
+func TestUpdateEmail_Clear(t *testing.T) {
+	f := newUnitFixture(t)
+	// Set then clear
+	doUnit(t, f.app, "PUT", "/api/me/email", map[string]any{"email": "alice@example.com"}, f.userToken)
+	resp := doUnit(t, f.app, "PUT", "/api/me/email", map[string]any{"email": ""}, f.userToken)
+	if resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpdateEmail_InvalidEmail(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/email",
+		map[string]any{"email": "not-an-email"}, f.userToken)
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUpdateEmail_Unauthenticated(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/email", map[string]any{"email": "x@x.com"}, "")
+	if resp.StatusCode != 401 {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+// ---- Change password ----
+
+func TestChangePassword_Success(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/password", map[string]any{
+		"currentPassword": "pw",
+		"newPassword":     "newpw123",
+	}, f.userToken)
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	// Old token still valid (TokenVersion unchanged). Login with new pwd.
+	resp2 := doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+		"login": "alice", "password": "newpw123",
+	}, "")
+	if resp2.StatusCode != 200 {
+		t.Fatal("login with new password should succeed")
+	}
+}
+
+func TestChangePassword_WrongCurrent(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/password", map[string]any{
+		"currentPassword": "wrong",
+		"newPassword":     "newpw123",
+	}, f.userToken)
+	if resp.StatusCode != 401 {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestChangePassword_MissingFields(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "PUT", "/api/me/password", map[string]any{
+		"currentPassword": "pw",
+	}, f.userToken)
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+// ---- Logout all (token version) ----
+
+func TestLogoutAll_Success(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "POST", "/api/me/logout-all",
+		map[string]any{"password": "pw"}, f.userToken)
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestLogoutAll_WrongPassword(t *testing.T) {
+	f := newUnitFixture(t)
+	resp := doUnit(t, f.app, "POST", "/api/me/logout-all",
+		map[string]any{"password": "wrong"}, f.userToken)
+	if resp.StatusCode != 401 {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestLogoutAll_RevokesOldToken(t *testing.T) {
+	f := newUnitFixture(t)
+	// Revoke all sessions with current password
+	resp := doUnit(t, f.app, "POST", "/api/me/logout-all",
+		map[string]any{"password": "pw"}, f.userToken)
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("logout-all want 200, got %d: %s", resp.StatusCode, body)
+	}
+	// Old token must now return 401
+	resp2 := doUnit(t, f.app, "GET", "/api/me", nil, f.userToken)
+	if resp2.StatusCode != 401 {
+		t.Fatalf("old token should be revoked (want 401), got %d", resp2.StatusCode)
+	}
+}
+
+func TestLogoutAll_NewTokenStillValid(t *testing.T) {
+	f := newUnitFixture(t)
+	// Revoke all
+	doUnit(t, f.app, "POST", "/api/me/logout-all",
+		map[string]any{"password": "pw"}, f.userToken)
+	// Re-login to get a fresh token
+	resp := doUnit(t, f.app, "POST", "/auth/login",
+		map[string]any{"login": "alice", "password": "pw"}, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("re-login want 200, got %d", resp.StatusCode)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	// New token must work
+	resp2 := doUnit(t, f.app, "GET", "/api/me", nil, out.Token)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("new token should be valid, got %d", resp2.StatusCode)
 	}
 }
 

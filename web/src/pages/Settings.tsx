@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
-import { api, type PublicDevice, type LoginRecord } from '../lib/api'
+import { api, clearSession, type PublicDevice, type LoginRecord } from '../lib/api'
 import { useConfirm } from '../components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
@@ -29,9 +29,22 @@ export default function Settings() {
   const [busy, setBusy] = useState(false)
   const [devices, setDevices] = useState<PublicDevice[]>([])
   const [loginHistory, setLoginHistory] = useState<LoginRecord[]>([])
+  const [email, setEmail] = useState('')
+  const [emailSaving, setEmailSaving] = useState(false)
+  const [emailMsg, setEmailMsg] = useState<string | null>(null)
+  const [currentPwd, setCurrentPwd] = useState('')
+  const [newPwd, setNewPwd] = useState('')
+  const [changePwdTotp, setChangePwdTotp] = useState('')
+  const [changePwdMsg, setChangePwdMsg] = useState<string | null>(null)
+  const [changePwdErr, setChangePwdErr] = useState<string | null>(null)
+  const [changePwdBusy, setChangePwdBusy] = useState(false)
+  const [logoutAllTotp, setLogoutAllTotp] = useState('')
+  const [logoutAllErr, setLogoutAllErr] = useState<string | null>(null)
+  const [logoutAllBusy, setLogoutAllBusy] = useState(false)
+  const [logoutAllTotpVisible, setLogoutAllTotpVisible] = useState(false)
 
   useEffect(() => {
-    api.me().then(u => setTotpEnabled(u.totpEnabled)).catch(() => {})
+    api.me().then(u => { setTotpEnabled(u.totpEnabled); setEmail(u.email ?? '') }).catch(() => {})
     api.devices.list().then(setDevices).catch(() => {})
     api.loginHistory().then(setLoginHistory).catch(() => {})
   }, [])
@@ -87,6 +100,46 @@ export default function Settings() {
   }
 
   const cancel = () => { setPhase('idle'); setErr(null) }
+
+  const saveEmail = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    setEmailMsg(null); setEmailSaving(true)
+    try {
+      await api.updateEmail(email)
+      setEmailMsg(t('settings.emailSaved'))
+    } catch (e: any) { setEmailMsg(e.message) }
+    finally { setEmailSaving(false) }
+  }
+
+  const submitChangePassword = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    setChangePwdErr(null); setChangePwdMsg(null); setChangePwdBusy(true)
+    try {
+      await api.changePassword(currentPwd, newPwd, totpEnabled ? changePwdTotp || undefined : undefined)
+      setChangePwdMsg(t('settings.passwordChanged'))
+      setCurrentPwd(''); setNewPwd(''); setChangePwdTotp('')
+    } catch (e: any) { setChangePwdErr(e.message) }
+    finally { setChangePwdBusy(false) }
+  }
+
+  const doLogoutAll = async () => {
+    setLogoutAllErr(null); setLogoutAllBusy(true)
+    try {
+      await api.logoutAll(totpEnabled ? { totpCode: logoutAllTotp } : {})
+      clearSession()
+      window.location.replace('/login')
+    } catch (e: any) { setLogoutAllErr(e.message); setLogoutAllBusy(false) }
+  }
+
+  const handleLogoutAll = async () => {
+    if (totpEnabled) {
+      setLogoutAllTotp(''); setLogoutAllErr(null)
+      setLogoutAllTotpVisible(true)
+    } else {
+      if (!await confirm({ title: t('settings.logoutAllConfirmTitle'), message: t('settings.logoutAllConfirmMessage'), danger: true })) return
+      doLogoutAll()
+    }
+  }
 
   const revokeDevice = async (id: string) => {
     if (!await confirm({ title: t('settings.revokeDeviceConfirmTitle'), message: t('settings.revokeDeviceConfirmMessage'), danger: true })) return
@@ -248,6 +301,58 @@ export default function Settings() {
             </>
           )}
         </section>
+
+      <section className="settings-section">
+        <h3>{t('settings.notificationEmail')}</h3>
+        <form className="totp-form" onSubmit={saveEmail}>
+          <input
+            type="email"
+            placeholder={t('settings.emailPlaceholder')}
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+          />
+          {emailMsg && <p className={emailMsg === t('settings.emailSaved') ? 'muted' : 'error'}>{emailMsg}</p>}
+          <div className="form-row">
+            <button type="submit" disabled={emailSaving}>{t('settings.confirm')}</button>
+          </div>
+        </form>
+      </section>
+
+      <section className="settings-section">
+        <h3>{t('settings.changePassword')}</h3>
+        <form className="totp-form" onSubmit={submitChangePassword}>
+          <input
+            type="password"
+            placeholder={t('settings.currentPassword')}
+            value={currentPwd}
+            onChange={e => setCurrentPwd(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder={t('settings.newPassword')}
+            value={newPwd}
+            onChange={e => setNewPwd(e.target.value)}
+          />
+          {totpEnabled && (
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder={t('login.totpCodePlaceholder')}
+              maxLength={10}
+              value={changePwdTotp}
+              onChange={e => setChangePwdTotp(e.target.value)}
+            />
+          )}
+          {changePwdErr && <p className="error">{changePwdErr}</p>}
+          {changePwdMsg && <p className="muted">{changePwdMsg}</p>}
+          <div className="form-row">
+            <button type="submit" disabled={changePwdBusy || !currentPwd || !newPwd}>
+              {t('settings.changePassword')}
+            </button>
+          </div>
+        </form>
+      </section>
+
       </div>
 
       <div className="settings-col-right">
@@ -269,6 +374,42 @@ export default function Settings() {
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+        <section className="settings-section">
+          <h3>{t('settings.logoutAll')}</h3>
+          {logoutAllTotpVisible ? (
+            <div className="totp-form">
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder={t('login.totpCodePlaceholder')}
+                maxLength={10}
+                value={logoutAllTotp}
+                onChange={e => setLogoutAllTotp(e.target.value)}
+                autoFocus
+              />
+              {logoutAllErr && <p className="error">{logoutAllErr}</p>}
+              <div className="form-row">
+                <button
+                  className="danger"
+                  disabled={logoutAllBusy || !logoutAllTotp}
+                  onClick={doLogoutAll}
+                >
+                  {t('settings.logoutAll')}
+                </button>
+                <button type="button" className="ghost" onClick={() => setLogoutAllTotpVisible(false)}>
+                  {t('settings.cancel')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="settings-actions">
+              {logoutAllErr && <p className="error">{logoutAllErr}</p>}
+              <button className="danger ghost" onClick={handleLogoutAll} disabled={logoutAllBusy}>
+                {t('settings.logoutAll')}
+              </button>
+            </div>
           )}
         </section>
       </div>

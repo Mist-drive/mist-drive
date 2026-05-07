@@ -10,6 +10,7 @@ export type PublicUser = {
   quotaBytes: number
   usedBytes: number
   totpEnabled: boolean
+  email?: string
 }
 
 export type PublicDevice = {
@@ -211,6 +212,15 @@ export const api = {
   },
   loginHistory: () => req<LoginRecord[]>('/api/login-history'),
   me: () => req<PublicUser>('/api/me'),
+  updateEmail: (email: string) =>
+    req<PublicUser>('/api/me/email', { method: 'PUT', body: JSON.stringify({ email }) }),
+  changePassword: (currentPassword: string, newPassword: string, totpCode?: string) =>
+    req<void>('/api/me/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword, ...(totpCode ? { totpCode } : {}) }),
+    }),
+  logoutAll: (opts: { password?: string; totpCode?: string }) =>
+    req<void>('/api/me/logout-all', { method: 'POST', body: JSON.stringify(opts) }),
   listFiles: (prefix = '') =>
     req<ListResponse>(`/api/files?prefix=${encodeURIComponent(prefix)}`),
   deleteFile: (key: string) =>

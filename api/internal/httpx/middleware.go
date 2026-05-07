@@ -17,6 +17,7 @@ type ctxKey string
 const (
 	CtxUID  ctxKey = "uid"
 	CtxRole ctxKey = "role"
+	CtxVer  ctxKey = "ver"
 )
 
 func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber.Handler {
@@ -60,6 +61,7 @@ func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber
 		}
 		c.Locals(CtxUID, claims.UID)
 		c.Locals(CtxRole, claims.Role)
+		c.Locals(CtxVer, claims.Ver)
 		return c.Next()
 	}
 }
@@ -73,5 +75,10 @@ func AdminOnly(c *fiber.Ctx) error {
 
 func UID(c *fiber.Ctx) string {
 	v, _ := c.Locals(CtxUID).(string)
+	return v
+}
+
+func tokenVer(c *fiber.Ctx) int64 {
+	v, _ := c.Locals(CtxVer).(int64)
 	return v
 }

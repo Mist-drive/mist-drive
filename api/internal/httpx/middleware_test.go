@@ -31,7 +31,7 @@ func newMiddlewareAppWithBoot(secret string, bootTime time.Time) *fiber.App {
 
 func issueToken(t *testing.T, secret, uid, role string) string {
 	t.Helper()
-	tok, err := auth.Issue(secret, uid, role, time.Hour)
+	tok, err := auth.Issue(secret, uid, role, 0, time.Hour)
 	if err != nil {
 		t.Fatalf("auth.Issue: %v", err)
 	}

@@ -33,6 +33,13 @@ services:
       DEFAULT_QUOTA_BYTES: ${DEFAULT_QUOTA_BYTES}
       UPLOAD_TTL_HOURS: ${UPLOAD_TTL_HOURS}
       LOG_LEVEL: ${LOG_LEVEL}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      PUBLIC_URL: ${PUBLIC_URL:-}
     volumes:
       - ./data/api:/app/data
       - ./data/api/logs:/app/logs
@@ -50,6 +57,14 @@ services:
       timeout: 3s
       retries: 10
       start_period: 3s
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # web UI → http://localhost:8025
+      - "1025:1025"   # SMTP (no auth, no TLS — internal only)
+    mem_limit: 64m
 
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
