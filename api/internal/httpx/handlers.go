@@ -14,6 +14,7 @@ package httpx
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
@@ -40,12 +41,21 @@ type Server struct {
 }
 
 func (s *Server) Register(app *fiber.App) {
+	// Truncate to whole seconds: JWT iat is stored as Unix seconds, so
+	// sub-second precision on bootTime would cause false 401s for tokens
+	// issued in the same second the server started.
+	// Dev builds skip the check entirely (zero time is before any real iat).
+	var bootTime time.Time
+	if s.Version != "dev" {
+		bootTime = time.Now().Truncate(time.Second)
+	}
+
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true, "version": s.Version, "features": s.Features})
 	})
 	app.Post("/auth/login", s.login)
 
-	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret))
+	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime))
 	api.Get("/me", s.me)
 
 	files := api.Group("/files")

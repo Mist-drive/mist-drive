@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yann/mist-drive/api/internal/auth"
@@ -14,7 +15,7 @@ const (
 	CtxRole ctxKey = "role"
 )
 
-func AuthMiddleware(secret string) fiber.Handler {
+func AuthMiddleware(secret string, bootTime time.Time) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Prefer the Authorization header. Fall back to a `token` query
 		// param so the browser can point `window.location` at streaming
@@ -32,6 +33,11 @@ func AuthMiddleware(secret string) fiber.Handler {
 		claims, err := auth.Parse(secret, tok)
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid token")
+		}
+		// Reject tokens issued before this server instance started.
+		// Forces re-login after a restart/redeployment.
+		if claims.IssuedAt == nil || claims.IssuedAt.Time.Before(bootTime) {
+			return fiber.NewError(fiber.StatusUnauthorized, "session expired, please log in again")
 		}
 		c.Locals(CtxUID, claims.UID)
 		c.Locals(CtxRole, claims.Role)

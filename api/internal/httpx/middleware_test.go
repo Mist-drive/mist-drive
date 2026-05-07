@@ -14,11 +14,16 @@ import (
 const middlewareSecret = "test-secret-32bytesxxxxxxxxxx!!"
 
 func newMiddlewareApp(secret string) *fiber.App {
+	// zero bootTime so all freshly-issued tokens are considered post-boot
+	return newMiddlewareAppWithBoot(secret, time.Time{})
+}
+
+func newMiddlewareAppWithBoot(secret string, bootTime time.Time) *fiber.App {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Get("/protected", httpx.AuthMiddleware(secret), func(c *fiber.Ctx) error {
+	app.Get("/protected", httpx.AuthMiddleware(secret, bootTime), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true, "uid": httpx.UID(c)})
 	})
-	app.Get("/admin", httpx.AuthMiddleware(secret), httpx.AdminOnly, func(c *fiber.Ctx) error {
+	app.Get("/admin", httpx.AuthMiddleware(secret, bootTime), httpx.AdminOnly, func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true})
 	})
 	return app
@@ -107,6 +112,22 @@ func TestAdminOnly_UserRole(t *testing.T) {
 	}
 	if resp.StatusCode != fiber.StatusForbidden {
 		t.Fatalf("want 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuthMiddleware_PreBootToken(t *testing.T) {
+	tok := issueToken(t, middlewareSecret, "uid1", "user")
+	// Boot time set 1s in the future so the just-issued token looks pre-boot.
+	app := newMiddlewareAppWithBoot(middlewareSecret, time.Now().Add(time.Second))
+
+	req, _ := http.NewRequest("GET", "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("want 401 for pre-boot token, got %d", resp.StatusCode)
 	}
 }
 
