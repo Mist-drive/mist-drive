@@ -331,9 +331,7 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 		if !f.Enabled {
 			continue
 		}
-		// Download is disabled: local tree is always source of truth.
-		// To re-enable bidirectional sync, replace false with f.Download.
-		e.reconcileOne(ctx, f, f.Upload, false, remoteAll, gen)
+		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll, gen)
 	}
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
@@ -451,10 +449,9 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 			e.bumpSkipped()
 			continue
 		}
-		// [download disabled] Re-enable by passing f.Download in reconcileAll.
-		// if err := e.download(f, rel); err != nil {
-		// 	e.recordErr(err)
-		// }
+		if err := e.download(f, rel); err != nil {
+				e.recordErr(err)
+			}
 	}
 }
 
