@@ -123,3 +123,11 @@ Wails bindings regen: `cd desktop && wails generate module`
 - ~~**CE/Pro feature flags**~~ — `api/internal/features/` package; `ce.go` (`!pro` tag) ships in public repo with all flags false; `pro.go` (`pro` tag) lives in private repo only; `/health` returns `features` object; web reads via `fetchHealth()`, desktop via `GetFeatures()` Wails binding
 - ~~**401 auto-redirect**~~ — web: `req()` and `previewFile()` detect 401 → `clearSession()` + `window.location.replace('/login')`; desktop: `session.ts` pub/sub, `is401()` helper, `notifySessionExpired()` called in `Files.tsx`/`Home.tsx` catch blocks
 - ~~**i18n**~~ — i18next + react-i18next; `shared/locales/en.json` single source of truth; web lazy-loads via HTTP backend (not bundled); desktop bundles via static JSON import; `resolve.dedupe` in both Vite configs prevents dual-instance `NO_I18NEXT_INSTANCE` error in production builds
+
+## MinIO KMS / Encryption — Options Under Consideration
+
+Three approaches discussed for protecting MinIO data at rest. No decision made yet.
+
+- **Option A — S3 Server-Side Encryption (SSE-S3 / SSE-KMS)**: MinIO native encryption via `MINIO_KMS_SECRET_KEY` (or external KMS like Vault/KES). Key passed as env var or secret. Transparent to mist-drive — no application changes. Downside: key and MinIO process on the same host limits protection against full server compromise.
+- **Option B — 1Password-style account key**: A second secret derived client-side is mixed into encryption so that the server secret alone cannot decrypt. Would require an application-level encryption layer in mist-drive before uploading to MinIO. Strong separation (server breach is not enough) but significant complexity and hard key-recovery UX.
+- **Option C — Docker Swarm Secrets**: Deploy `cy17-single-node-services-stack` via `docker stack deploy`. `MINIO_KMS_SECRET_KEY_FILE` points to `/run/secrets/minio_kms_key`; secret created once with `docker secret create`, never written to disk in plaintext. Secret not visible in `docker inspect` or `.env`. Requires Swarm mode even on a single node.

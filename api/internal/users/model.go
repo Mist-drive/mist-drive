@@ -1,6 +1,9 @@
 package users
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Role string
 
@@ -50,8 +53,11 @@ type User struct {
 }
 
 func (u *User) AppendLoginRecord(ip, ua string) {
+	ip = strings.Clone(ip)
 	if runes := []rune(ua); len(runes) > 120 {
 		ua = string(runes[:120])
+	} else {
+		ua = strings.Clone(ua)
 	}
 	r := LoginRecord{IP: ip, UserAgent: ua, At: time.Now()}
 	u.LoginHistory = append([]LoginRecord{r}, u.LoginHistory...)

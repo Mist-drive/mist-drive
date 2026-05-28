@@ -64,6 +64,10 @@ func main() {
 		// Trust X-Forwarded-For set by Traefik so c.IP() returns the real
 		// client IP rather than the Traefik container IP.
 		ProxyHeader: fiber.HeaderXForwardedFor,
+		// Default 4 KiB is too small when a browser accumulates large cookies
+		// from other apps on the same localhost origin (e.g. local work devenvs
+		// with OIDC session JWTs). 16 KiB covers realistic worst cases.
+		ReadBufferSize: 16 * 1024,
 	})
 	app.Use(recover.New())
 	// CORS is intentionally not configured: the SPA is served from the

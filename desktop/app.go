@@ -160,7 +160,9 @@ func (a *App) Login(apiURL, login, password, totpCode string, rememberLogin, rem
 	s.JWT = result.Token
 	s.Login = result.User.Login
 	s.RememberLogin = rememberLogin
-	s.TrustedDeviceCookie = result.DeviceCookie
+	if result.DeviceCookie != "" {
+		s.TrustedDeviceCookie = result.DeviceCookie
+	}
 	if err := a.settings.Save(s); err != nil {
 		return LoginResponse{}, err
 	}
