@@ -27,19 +27,16 @@ func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber
 		}
 	}
 	return func(c *fiber.Ctx) error {
-		// Prefer the Authorization header. Fall back to a `token` query
-		// param so the browser can point `window.location` at streaming
-		// download endpoints (which can't set custom headers). The token
-		// is short-lived and only ever appears in the user's own URL bar.
-		var tok string
-		if h := c.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-			tok = strings.TrimPrefix(h, "Bearer ")
-		} else {
-			tok = c.Query("token")
-		}
-		if tok == "" {
+		// Header-only. We used to accept a `?token=` query param for
+		// browser navigation endpoints (ws + zip download), but those now
+		// use first-message auth and single-use tickets respectively, so
+		// the JWT never needs to ride in a URL — keeping it out of access
+		// logs entirely.
+		h := c.Get("Authorization")
+		if !strings.HasPrefix(h, "Bearer ") {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing bearer token")
 		}
+		tok := strings.TrimPrefix(h, "Bearer ")
 		claims, err := auth.Parse(secret, tok)
 		if err != nil {
 			switch {

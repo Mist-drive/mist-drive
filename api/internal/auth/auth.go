@@ -24,6 +24,18 @@ func VerifyPassword(hash, pw string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
 
+// dummyHash is a valid bcrypt hash computed once at startup. It exists
+// only so DummyVerify can burn a real bcrypt comparison.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("timing-equalizer"), bcrypt.DefaultCost)
+
+// DummyVerify spends a bcrypt comparison against a throwaway hash. Call
+// it on the unknown-user login path so the response latency matches the
+// wrong-password path — denying an attacker a timing oracle for
+// username enumeration. The result is intentionally discarded.
+func DummyVerify(pw string) {
+	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(pw))
+}
+
 func Issue(secret, uid, role string, ver int64, ttl time.Duration) (string, error) {
 	c := Claims{
 		UID:  uid,

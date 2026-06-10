@@ -168,6 +168,51 @@ func TestLogin_WrongPassword(t *testing.T) {
 	}
 }
 
+func TestLogin_LocksOutAfterRepeatedFailures(t *testing.T) {
+	f := newUnitFixture(t)
+	// Default throttle locks after 5 failures. Five wrong attempts → 401,
+	// the sixth (even with the *correct* password) → 429.
+	for i := range 5 {
+		resp := doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+			"login": "alice", "password": "wrong",
+		}, "")
+		if resp.StatusCode != 401 {
+			t.Fatalf("attempt %d: want 401, got %d", i+1, resp.StatusCode)
+		}
+	}
+	resp := doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+		"login": "alice", "password": "pw",
+	}, "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("want 429 after lockout, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header on lockout")
+	}
+}
+
+func TestLogin_SuccessResetsFailureCount(t *testing.T) {
+	f := newUnitFixture(t)
+	// Four failures (under the threshold of 5)...
+	for range 4 {
+		_ = doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+			"login": "alice", "password": "wrong",
+		}, "")
+	}
+	// ...a success resets the counter...
+	if resp := doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+		"login": "alice", "password": "pw",
+	}, ""); resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	// ...so another failure is treated as the first, not the fifth.
+	if resp := doUnit(t, f.app, "POST", "/auth/login", map[string]any{
+		"login": "alice", "password": "wrong",
+	}, ""); resp.StatusCode != 401 {
+		t.Fatalf("want 401 (counter reset), got %d", resp.StatusCode)
+	}
+}
+
 func TestLogin_MissingFields(t *testing.T) {
 	f := newUnitFixture(t)
 	resp := doUnit(t, f.app, "POST", "/auth/login", map[string]any{}, "")

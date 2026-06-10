@@ -86,7 +86,10 @@ func TestAuthMiddleware_ValidHeader(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_QueryParam(t *testing.T) {
+// A JWT in the ?token= query param is no longer accepted — auth is
+// header-only now (ws uses first-message auth, zip uses tickets), so the
+// token never rides in a URL. This guards against the fallback creeping back.
+func TestAuthMiddleware_QueryParamRejected(t *testing.T) {
 	app := newMiddlewareApp(middlewareSecret)
 	tok := issueToken(t, middlewareSecret, "uid1", "user")
 
@@ -95,8 +98,8 @@ func TestAuthMiddleware_QueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != fiber.StatusOK {
-		t.Fatalf("want 200, got %d", resp.StatusCode)
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("want 401 (query token must be rejected), got %d", resp.StatusCode)
 	}
 }
 

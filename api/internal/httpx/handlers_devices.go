@@ -3,6 +3,7 @@ package httpx
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ func validateDeviceCookie(val string, devices []users.TrustedDevice) (valid bool
 	hashed := hex.EncodeToString(h[:])
 	now := time.Now()
 	for _, d := range devices {
-		if d.ID == id && d.HashedToken == hashed && now.Before(d.ExpiresAt) {
+		if d.ID == id && subtle.ConstantTimeCompare([]byte(d.HashedToken), []byte(hashed)) == 1 && now.Before(d.ExpiresAt) {
 			return true, id
 		}
 	}
@@ -83,6 +84,33 @@ func (s *Server) registerDevice(c *fiber.Ctx, u *users.User) {
 	})
 }
 
+// expireDeviceCookie tells the browser to drop the trusted-device
+// cookie immediately. Attributes must match the original so the browser
+// targets the same cookie.
+func expireDeviceCookie(c *fiber.Ctx) {
+	c.Cookie(&fiber.Cookie{
+		Name:     deviceCookieName,
+		Value:    "",
+		MaxAge:   -1,
+		HTTPOnly: true,
+		SameSite: "Strict",
+		Path:     "/",
+	})
+}
+
+// currentDeviceID returns the device id embedded in the caller's
+// trusted-device cookie, or "" if absent/malformed.
+func currentDeviceID(c *fiber.Ctx) string {
+	cookie := c.Cookies(deviceCookieName)
+	if cookie == "" {
+		return ""
+	}
+	if parts := strings.SplitN(cookie, ":", 2); len(parts) == 2 {
+		return parts[0]
+	}
+	return ""
+}
+
 // GET /api/devices
 func (s *Server) listDevices(c *fiber.Ctx) error {
 	u, err := s.currentUser(c)
@@ -102,6 +130,9 @@ func (s *Server) revokeAllDevices(c *fiber.Ctx) error {
 	if err := s.Users.Update(u); err != nil {
 		return err
 	}
+	// This browser's cookie is now dead too — clear it so it doesn't
+	// linger for 30 days as a stale (always-rejected) credential.
+	expireDeviceCookie(c)
 	return c.JSON(fiber.Map{"ok": true})
 }
 
@@ -121,6 +152,11 @@ func (s *Server) revokeDevice(c *fiber.Ctx) error {
 	u.TrustedDevices = filtered
 	if err := s.Users.Update(u); err != nil {
 		return err
+	}
+	// If the caller just revoked the device they're sitting on, clear
+	// its now-defunct cookie.
+	if currentDeviceID(c) == id {
+		expireDeviceCookie(c)
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }

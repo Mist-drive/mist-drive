@@ -455,6 +455,18 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 	}
 }
 
+// safeLocalPath joins base with a remote-derived relative path and
+// rejects any result that escapes base via "..". Returns the cleaned
+// path and ok=false on attempted traversal.
+func safeLocalPath(base, rel string) (string, bool) {
+	clean := filepath.Join(base, filepath.FromSlash(rel))
+	rel2, err := filepath.Rel(base, clean)
+	if err != nil || rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return clean, true
+}
+
 // remoteKey joins a folder's remote prefix with a relative path,
 // handling the trailing-slash edge case. Extracted because upload()
 // and download() both need the exact same logic.
@@ -494,7 +506,14 @@ func (e *Engine) deleteRemote(f settings.SyncFolder, rel string) error {
 }
 
 func (e *Engine) download(f settings.SyncFolder, rel string) error {
-	local := filepath.Join(f.Local, filepath.FromSlash(rel))
+	// rel is derived from server-supplied object keys. Guard against a
+	// crafted key (e.g. containing "../") writing outside the sync folder.
+	local, ok := safeLocalPath(f.Local, rel)
+	if !ok {
+		err := fmt.Errorf("refusing unsafe download path: %s", rel)
+		e.appendLog("error", rel, err.Error())
+		return err
+	}
 	e.setInFlight("↓ " + rel)
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 		e.appendLog("error", rel, err.Error())

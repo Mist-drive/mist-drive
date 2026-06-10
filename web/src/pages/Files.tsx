@@ -259,8 +259,10 @@ export default function Files() {
     if (!ok) return
     await withBusy(t('status.deleting'), async () => { await api.deleteFolder(path + '/'); await refresh() })
   }
-  const onDownloadFolder = (path: string) => {
-    window.location.href = api.downloadZipUrl(path + '/')
+  const onDownloadFolder = async (path: string) => {
+    await withBusy(t('status.downloading'), async () => {
+      await api.downloadZip(path + '/')
+    })
   }
 
   const onMkdir = async () => {

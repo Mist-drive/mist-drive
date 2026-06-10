@@ -63,6 +63,40 @@ func TestStore_CRUD(t *testing.T) {
 	}
 }
 
+func TestStore_EmailTaken(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	alice := newTestUser("id1", "alice")
+	alice.Email = "shared@example.com"
+	if err := s.Create(alice); err != nil {
+		t.Fatal(err)
+	}
+	bob := newTestUser("id2", "bob")
+	if err := s.Create(bob); err != nil {
+		t.Fatal(err)
+	}
+
+	if !s.EmailTaken("shared@example.com", "") {
+		t.Fatal("want taken for a new user")
+	}
+	if !s.EmailTaken("SHARED@Example.com", "") {
+		t.Fatal("want case-insensitive match")
+	}
+	// alice owns it — not "taken" relative to herself (idempotent re-save).
+	if s.EmailTaken("shared@example.com", "id1") {
+		t.Fatal("owner should not collide with themselves")
+	}
+	// bob trying to claim it is a collision.
+	if !s.EmailTaken("shared@example.com", "id2") {
+		t.Fatal("another user claiming the email should collide")
+	}
+	if s.EmailTaken("", "") {
+		t.Fatal("empty email is never taken")
+	}
+	if s.EmailTaken("free@example.com", "") {
+		t.Fatal("unused email should be free")
+	}
+}
+
 func TestStore_GetReturnsCopy(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
 	_ = s.Create(newTestUser("id1", "alice"))

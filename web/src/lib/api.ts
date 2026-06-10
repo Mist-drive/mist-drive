@@ -99,10 +99,15 @@ function ensureWS() {
   const tok = getToken()
   if (!tok) return
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(tok)}`
+  // No token in the URL — authenticate via the first message instead, so
+  // the JWT never lands in proxy/access logs.
+  const url = `${proto}//${location.host}/ws`
   const ws = new WebSocket(url)
   _ws = ws
-  ws.onopen = () => { _wsBackoff = 500 }
+  ws.onopen = () => {
+    _wsBackoff = 500
+    ws.send(JSON.stringify({ type: 'auth', token: tok }))
+  }
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data) as EventMsg
@@ -189,10 +194,10 @@ export const api = {
   },
   totp: {
     setup: () => req<{ secret: string; uri: string }>('/api/totp/setup'),
-    enable: (secret: string, code: string) =>
+    enable: (secret: string, code: string, password: string) =>
       req<{ backupCodes: string[] }>('/api/totp/enable', {
         method: 'POST',
-        body: JSON.stringify({ secret, code }),
+        body: JSON.stringify({ secret, code, password }),
       }),
     disable: (password: string, code: string) =>
       req<{ ok: boolean }>('/api/totp/disable', {
@@ -232,13 +237,17 @@ export const api = {
     ),
   download: (key: string) =>
     req<{ url: string }>(`/api/files/download?key=${encodeURIComponent(key)}`),
-  // Folder-as-zip download. Can't go through fetch because the response
-  // is a stream we want the browser to save directly, and can't set an
-  // Authorization header on window.location — so the token is passed as
-  // a query param (the server's auth middleware accepts either).
-  downloadZipUrl: (prefix: string) => {
-    const tok = getToken() ?? ''
-    return `/api/files/download-zip?prefix=${encodeURIComponent(prefix)}&token=${encodeURIComponent(tok)}`
+  // Folder-as-zip download. The stream must be saved by the browser via
+  // navigation, which can't set an Authorization header. Instead of
+  // leaking the session JWT in the URL, we mint a short-lived single-use
+  // ticket (authenticated POST, header) bound to {user, prefix}, then
+  // navigate to the top-level stream route with just the ticket.
+  downloadZip: async (prefix: string) => {
+    const { ticket } = await req<{ ticket: string }>('/api/files/download-zip-ticket', {
+      method: 'POST',
+      body: JSON.stringify({ prefix }),
+    })
+    window.location.href = `/download-zip?ticket=${encodeURIComponent(ticket)}`
   },
   uploadInit: (key: string, size: number, partSize: number) =>
     req<{ uploadId: string; partSize: number; urls: { partNumber: number; url: string }[] }>(

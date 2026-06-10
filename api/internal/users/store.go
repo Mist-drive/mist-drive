@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gofrs/flock"
@@ -164,6 +165,28 @@ func (s *Store) GetByID(id string) (*User, error) {
 		return &cp, nil
 	}
 	return nil, ErrNotFound
+}
+
+// EmailTaken reports whether email is already used by a user other than
+// exceptID (pass "" when creating a new user). Comparison is
+// case-insensitive; an empty email is never considered taken. Email is
+// only an index in memory — there's no DB — so we scan; the user set is
+// small.
+func (s *Store) EmailTaken(email, exceptID string) bool {
+	if email == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for id, u := range s.byID {
+		if id == exceptID {
+			continue
+		}
+		if strings.EqualFold(u.Email, email) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) GetByLogin(login string) (*User, error) {

@@ -3,6 +3,7 @@ module github.com/yann/mist-drive/api
 go 1.26
 
 require (
+	github.com/fasthttp/websocket v1.5.3
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/gofiber/websocket/v2 v2.2.1
 	github.com/gofrs/flock v0.12.1
@@ -11,6 +12,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.90
 	github.com/pquerna/otp v1.4.0
 	github.com/testcontainers/testcontainers-go v0.41.0
+	github.com/wneessen/go-mail v0.7.2
 	golang.org/x/crypto v0.48.0
 	golang.org/x/image v0.39.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -37,7 +39,6 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
-	github.com/fasthttp/websocket v1.5.3 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -77,7 +78,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
-	github.com/wneessen/go-mail v0.7.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0 // indirect

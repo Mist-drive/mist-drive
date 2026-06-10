@@ -21,6 +21,7 @@ export default function Settings() {
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [secret, setSecret] = useState('')
   const [confirmCode, setConfirmCode] = useState('')
+  const [enablePassword, setEnablePassword] = useState('')
   const [disablePassword, setDisablePassword] = useState('')
   const [disableCode, setDisableCode] = useState('')
   const [regenCode, setRegenCode] = useState('')
@@ -57,6 +58,7 @@ export default function Settings() {
       const dataUrl = await QRCode.toDataURL(uri, { width: 220, margin: 1 })
       setQrDataUrl(dataUrl)
       setConfirmCode('')
+      setEnablePassword('')
       setPhase('enabling-qr')
     } catch (e: any) { setErr(e.message) }
     finally { setBusy(false) }
@@ -66,9 +68,10 @@ export default function Settings() {
     ev.preventDefault()
     setErr(null); setBusy(true)
     try {
-      const { backupCodes: codes } = await api.totp.enable(secret, confirmCode)
+      const { backupCodes: codes } = await api.totp.enable(secret, confirmCode, enablePassword)
       setBackupCodes(codes)
       setTotpEnabled(true)
+      setEnablePassword('')
       setPhase('backup-shown')
     } catch (e: any) { setErr(e.message) }
     finally { setBusy(false) }
@@ -198,9 +201,16 @@ export default function Settings() {
               onChange={e => setConfirmCode(e.target.value)}
               autoFocus
             />
+            <input
+              type="password"
+              autoComplete="current-password"
+              placeholder={t('login.password')}
+              value={enablePassword}
+              onChange={e => setEnablePassword(e.target.value)}
+            />
             {err && <p className="error">{err}</p>}
             <div className="form-row">
-              <button type="submit" disabled={busy || confirmCode.length < 6}>{t('settings.confirm')}</button>
+              <button type="submit" disabled={busy || confirmCode.length < 6 || !enablePassword}>{t('settings.confirm')}</button>
               <button type="button" className="ghost" onClick={cancel}>{t('settings.cancel')}</button>
             </div>
           </form>

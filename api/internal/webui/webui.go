@@ -53,7 +53,7 @@ func Mount(app *fiber.App) error {
 
 	// Cache-Control is decided per request by extension. This runs
 	// only for paths that fell through every earlier route, so it
-	// never touches /api, /auth, /health, or /api/ws responses.
+	// never touches /api, /auth, /health, /ws, or /download-zip responses.
 	app.Use(func(c *fiber.Ctx) error {
 		if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead {
 			if isImmutableAsset(c.Path()) {

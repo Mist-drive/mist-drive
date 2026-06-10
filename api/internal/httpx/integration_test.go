@@ -16,10 +16,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/fasthttp/websocket"
 	miniogo "github.com/minio/minio-go/v7"
 	miniogocreds "github.com/minio/minio-go/v7/pkg/credentials"
 
@@ -30,6 +32,7 @@ import (
 
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
+	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
@@ -139,6 +142,7 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 		S3:           s3c,
 		Uploads:      upStore,
 		Reservations: quota.New(),
+		Events:       events.NewHub(),
 	}
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	srv.Register(app)
@@ -399,28 +403,117 @@ func TestIntegration_DownloadZipStreamsFolder(t *testing.T) {
 	}
 }
 
-func TestIntegration_DownloadZipQueryTokenAuth(t *testing.T) {
-	// Token-via-query-param must authenticate the same as a header.
+func TestIntegration_DownloadZipQueryTokenRejected(t *testing.T) {
+	// The ?token= query param is no longer accepted anywhere — the
+	// authenticated download-zip route (desktop) requires a header; the
+	// browser path uses tickets. A JWT in the URL must now 401.
 	f := newFixture(t, 50<<20)
-	mc, _ := miniogo.New(f.cfg.S3Endpoint, &miniogo.Options{
-		Creds: miniogocreds.NewStaticV4(f.cfg.S3AccessKey, f.cfg.S3SecretKey, ""), Region: "us-east-1",
-	})
-	payload := []byte("hi")
-	_, err := mc.PutObject(context.Background(), f.user.Bucket(), "t/a.txt",
-		bytes.NewReader(payload), int64(len(payload)), miniogo.PutObjectOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// No Authorization header, token in the URL.
 	req, _ := http.NewRequest("GET",
 		"/api/files/download-zip?prefix=t/&token="+f.token, nil)
 	resp, err := f.app.Test(req, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("status=%d", resp.StatusCode)
+	if resp.StatusCode != 401 {
+		t.Fatalf("query token must be rejected, got status=%d", resp.StatusCode)
+	}
+}
+
+func TestIntegration_DownloadZipTicketFlow(t *testing.T) {
+	// Browser flow: mint a ticket (authenticated), then stream the zip
+	// at the top-level route with only the ticket — no JWT in the URL.
+	f := newFixture(t, 50<<20)
+	mc, _ := miniogo.New(f.cfg.S3Endpoint, &miniogo.Options{
+		Creds: miniogocreds.NewStaticV4(f.cfg.S3AccessKey, f.cfg.S3SecretKey, ""), Region: "us-east-1",
+	})
+	payload := []byte("hi")
+	if _, err := mc.PutObject(context.Background(), f.user.Bucket(), "t/a.txt",
+		bytes.NewReader(payload), int64(len(payload)), miniogo.PutObjectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1) Mint — authenticated, prefix in the body.
+	mintResp := f.do(t, "POST", "/api/files/download-zip-ticket", map[string]any{"prefix": "t/"})
+	if mintResp.StatusCode != 200 {
+		t.Fatalf("mint status=%d", mintResp.StatusCode)
+	}
+	var mint struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.NewDecoder(mintResp.Body).Decode(&mint); err != nil {
+		t.Fatal(err)
+	}
+	if mint.Ticket == "" {
+		t.Fatal("empty ticket")
+	}
+
+	// 2) Stream — no Authorization header, only the ticket in the URL.
+	streamReq, _ := http.NewRequest("GET", "/download-zip?ticket="+mint.Ticket, nil)
+	streamResp, err := f.app.Test(streamReq, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamResp.StatusCode != 200 {
+		t.Fatalf("stream status=%d", streamResp.StatusCode)
+	}
+
+	// 3) Single-use: replaying the same ticket must fail.
+	replayReq, _ := http.NewRequest("GET", "/download-zip?ticket="+mint.Ticket, nil)
+	replayResp, err := f.app.Test(replayReq, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayResp.StatusCode != 401 {
+		t.Fatalf("replay should be 401, got %d", replayResp.StatusCode)
+	}
+}
+
+func TestIntegration_WSFirstMessageAuth(t *testing.T) {
+	// Exercises the real WebSocket handshake (which app.Test can't do):
+	// the client must send {"type":"auth","token":…} as its first frame,
+	// then it joins the push hub. A bogus token must be rejected.
+	f := newFixture(t, 50<<20)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = f.app.Listener(ln) }()
+	defer func() { _ = f.app.Shutdown() }()
+	wsURL := "ws://" + ln.Addr().String() + "/ws"
+
+	// --- valid token: authenticate, then receive a pushed event ---
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.WriteJSON(map[string]string{"type": "auth", "token": f.token}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+	// Let the server authenticate + subscribe before we publish.
+	time.Sleep(300 * time.Millisecond)
+	f.srv.Events.Publish(f.user.ID, events.Event{Type: events.FilesChanged})
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("authenticated client expected a push, got read error: %v", err)
+	}
+	if !bytes.Contains(msg, []byte("files-changed")) {
+		t.Fatalf("unexpected push payload: %s", msg)
+	}
+
+	// --- bogus token: server must reject and close the socket ---
+	bad, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial (bogus): %v", err)
+	}
+	defer bad.Close()
+	_ = bad.WriteJSON(map[string]string{"type": "auth", "token": "not.a.jwt"})
+	_ = bad.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := bad.ReadMessage(); err == nil {
+		t.Fatal("bogus token: expected the connection to be closed, but a read succeeded")
 	}
 }
 

@@ -2,7 +2,6 @@ package wsclient
 
 import (
 	"net/url"
-	"strings"
 	"testing"
 )
 
@@ -10,14 +9,14 @@ func TestBuildWSURL(t *testing.T) {
 	cases := []struct {
 		name, in, wantScheme, wantPath string
 	}{
-		{"http→ws", "http://localhost:3000", "ws", "/api/ws"},
-		{"https→wss", "https://example.com", "wss", "/api/ws"},
-		{"trailing slash stripped", "http://localhost:3000/", "ws", "/api/ws"},
-		{"custom base path", "https://example.com/api-host", "wss", "/api-host/api/ws"},
+		{"http→ws", "http://localhost:3000", "ws", "/ws"},
+		{"https→wss", "https://example.com", "wss", "/ws"},
+		{"trailing slash stripped", "http://localhost:3000/", "ws", "/ws"},
+		{"custom base path", "https://example.com/api-host", "wss", "/api-host/ws"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildWSURL(tc.in, "tok123")
+			got, err := buildWSURL(tc.in)
 			if err != nil {
 				t.Fatalf("err: %v", err)
 			}
@@ -31,25 +30,17 @@ func TestBuildWSURL(t *testing.T) {
 			if u.Path != tc.wantPath {
 				t.Errorf("path = %s, want %s", u.Path, tc.wantPath)
 			}
-			if u.Query().Get("token") != "tok123" {
-				t.Errorf("token missing: %s", got)
+			// The token must never appear in the URL — it's sent as the
+			// first message instead.
+			if u.Query().Get("token") != "" {
+				t.Errorf("token must not be in URL: %s", got)
 			}
 		})
 	}
 }
 
 func TestBuildWSURLBadInput(t *testing.T) {
-	if _, err := buildWSURL("://bad", "t"); err == nil {
+	if _, err := buildWSURL("://bad"); err == nil {
 		t.Fatal("expected error on malformed url")
-	}
-}
-
-func TestBuildWSURLTokenEscaped(t *testing.T) {
-	got, err := buildWSURL("http://localhost", "a b&c")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(got, "a b&c") {
-		t.Fatalf("token not query-escaped: %s", got)
 	}
 }

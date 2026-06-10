@@ -1,4 +1,4 @@
-// Package wsclient is the desktop side of the /api/ws push channel.
+// Package wsclient is the desktop side of the /ws push channel.
 // It keeps a reconnecting websocket open to the API and invokes the
 // provided callback on every "files-changed" envelope — the envelope
 // carries no deltas, so the callback is just a "refresh your view"
@@ -42,7 +42,7 @@ func (c *Client) Start(apiURL, token string) {
 	if apiURL == "" || token == "" {
 		return
 	}
-	wsURL, err := buildWSURL(apiURL, token)
+	wsURL, err := buildWSURL(apiURL)
 	if err != nil {
 		c.log("ws url: " + err.Error())
 		return
@@ -51,7 +51,7 @@ func (c *Client) Start(apiURL, token string) {
 	c.mu.Lock()
 	c.cancel = cancel
 	c.mu.Unlock()
-	go c.loop(ctx, wsURL)
+	go c.loop(ctx, wsURL, token)
 }
 
 func (c *Client) Stop() {
@@ -63,10 +63,10 @@ func (c *Client) Stop() {
 	c.mu.Unlock()
 }
 
-func (c *Client) loop(ctx context.Context, wsURL string) {
+func (c *Client) loop(ctx context.Context, wsURL, token string) {
 	backoff := 500 * time.Millisecond
 	// InsecureSkipVerify mirrors the apiclient — dev uses self-signed or
-	// plain http, and the JWT in the URL is the real authenticator.
+	// plain http. The JWT is sent as the first message, not in the URL.
 	httpc := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
@@ -86,6 +86,12 @@ func (c *Client) loop(ctx context.Context, wsURL string) {
 				backoff *= 2
 			}
 			continue
+		}
+		// First-message auth: the server validates this before pushing
+		// anything. If the write fails the read loop below will error out
+		// immediately and we reconnect.
+		if authMsg, mErr := json.Marshal(map[string]string{"type": "auth", "token": token}); mErr == nil {
+			_ = conn.Write(ctx, websocket.MessageText, authMsg)
 		}
 		backoff = 500 * time.Millisecond
 		c.read(ctx, conn)
@@ -115,7 +121,7 @@ func (c *Client) read(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
-func buildWSURL(apiURL, token string) (string, error) {
+func buildWSURL(apiURL string) (string, error) {
 	u, err := url.Parse(apiURL)
 	if err != nil {
 		return "", err
@@ -126,9 +132,8 @@ func buildWSURL(apiURL, token string) (string, error) {
 	default:
 		u.Scheme = "ws"
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/ws"
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
+	// Top-level /ws (not /api/ws): the route lives outside the JWT-auth
+	// group and authenticates via the first message instead of the URL.
+	u.Path = strings.TrimRight(u.Path, "/") + "/ws"
 	return u.String(), nil
 }

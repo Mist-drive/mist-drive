@@ -13,7 +13,32 @@ import (
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
+	"github.com/yann/mist-drive/api/internal/users"
 )
+
+// sumObjectSizes totals the byte size of an object listing.
+func sumObjectSizes(objs []s3x.ObjectInfo) int64 {
+	var total int64
+	for _, o := range objs {
+		total += o.Size
+	}
+	return total
+}
+
+// recountUsedBytes re-derives a user's usedBytes from an authoritative
+// full bucket listing and persists it. Cheap, and keeps the counter
+// honest across crashes / stray parts / partial deletes.
+func (s *Server) recountUsedBytes(ctx context.Context, uid, bucket string) (int64, error) {
+	objs, err := s.S3.ListObjects(ctx, bucket, "")
+	if err != nil {
+		return 0, err
+	}
+	total := sumObjectSizes(objs)
+	if err := s.Users.SetUsedBytes(uid, total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
 
 func (s *Server) listFiles(c *fiber.Ctx) error {
 	u, err := s.currentUser(c)
@@ -103,15 +128,9 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 		count = 1
 	}
 
-	// Recompute usedBytes authoritatively from S3. Cheap and keeps the
-	// counter honest across crashes / stray parts / partial deletes.
-	if remaining, lerr := s.S3.ListObjects(c.Context(), u.Bucket(), ""); lerr == nil {
-		var total int64
-		for _, o := range remaining {
-			total += o.Size
-		}
-		_ = s.Users.SetUsedBytes(u.ID, total)
-	} else {
+	// Recompute usedBytes authoritatively from S3; fall back to a delta
+	// subtraction if the listing fails.
+	if _, lerr := s.recountUsedBytes(c.Context(), u.ID, u.Bucket()); lerr != nil {
 		_ = s.Users.AddUsedBytes(u.ID, -freed)
 	}
 	s.publishChange(u.ID)
@@ -130,10 +149,7 @@ func (s *Server) recomputeUsage(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	var total int64
-	for _, o := range objs {
-		total += o.Size
-	}
+	total := sumObjectSizes(objs)
 	if err := s.Users.SetUsedBytes(u.ID, total); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
@@ -164,8 +180,47 @@ func (s *Server) downloadZip(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "no user")
 	}
-	prefix := c.Query("prefix", "")
+	return s.streamZip(c, u, c.Query("prefix", ""))
+}
 
+// downloadZipTicket mints a short-lived single-use ticket so the browser
+// can stream a zip via plain navigation without putting the session JWT
+// in the URL. Authenticated (Authorization header) — runs under /api.
+func (s *Server) downloadZipTicket(c *fiber.Ctx) error {
+	u, err := s.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "no user")
+	}
+	var body struct {
+		Prefix string `json:"prefix"`
+	}
+	_ = c.BodyParser(&body)
+	ticket, err := s.dlGuard().issue(u.ID, body.Prefix)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(fiber.Map{"ticket": ticket})
+}
+
+// downloadZipByTicket streams a zip authorized solely by a ticket. It
+// lives OUTSIDE the /api group (top-level route) so no JWT auth runs —
+// the ticket is the credential. Prefix comes from the ticket, never the
+// query, so a ticket authorizes exactly one download.
+func (s *Server) downloadZipByTicket(c *fiber.Ctx) error {
+	uid, prefix, ok := s.dlGuard().consume(c.Query("ticket"))
+	if !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired download ticket")
+	}
+	u, err := s.Users.GetByID(uid)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "no user")
+	}
+	return s.streamZip(c, u, prefix)
+}
+
+// streamZip is the shared archive-streaming core used by both the
+// header-authenticated route (desktop) and the ticket route (browser).
+func (s *Server) streamZip(c *fiber.Ctx, u *users.User, prefix string) error {
 	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), prefix)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
@@ -173,10 +228,7 @@ func (s *Server) downloadZip(c *fiber.Ctx) error {
 	if len(objs) == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "no objects under prefix")
 	}
-	var total int64
-	for _, o := range objs {
-		total += o.Size
-	}
+	total := sumObjectSizes(objs)
 	if s.Cfg.MaxZipBytes > 0 && total > s.Cfg.MaxZipBytes {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "folder exceeds MAX_ZIP_BYTES")
 	}
@@ -185,9 +237,16 @@ func (s *Server) downloadZip(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "application/zip")
 	c.Set(fiber.HeaderContentDisposition, `attachment; filename="`+filename+`"`)
 
+	// Wall-time ceiling for the whole stream. This — not the download
+	// ticket's TTL — is what bounds a big/slow transfer; the ticket is
+	// validated once up front and plays no part during streaming.
+	timeout := s.Cfg.ZipStreamTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
 	bucket := u.Bucket()
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		zw := zip.NewWriter(w)
 		defer zw.Close()
@@ -287,9 +346,7 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 		if isFile {
 			copySize = fileSize
 		} else {
-			for _, o := range folderObjs {
-				copySize += o.Size
-			}
+			copySize = sumObjectSizes(folderObjs)
 		}
 		if copySize+renameMargin > free {
 			return fiber.NewError(fiber.StatusInsufficientStorage,

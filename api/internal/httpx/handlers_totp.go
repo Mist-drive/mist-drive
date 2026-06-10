@@ -71,25 +71,32 @@ func (s *Server) totpSetup(c *fiber.Ctx) error {
 }
 
 type totpEnableReq struct {
-	Secret string `json:"secret"`
-	Code   string `json:"code"`
+	Secret   string `json:"secret"`
+	Code     string `json:"code"`
+	Password string `json:"password"`
 }
 
-// POST /api/totp/enable — verify code works for secret, then save + return backup codes.
+// POST /api/totp/enable — verify password + code works for secret, then save + return backup codes.
 func (s *Server) totpEnable(c *fiber.Ctx) error {
 	var r totpEnableReq
 	if err := c.BodyParser(&r); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
 	}
-	if r.Secret == "" || r.Code == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "secret and code required")
-	}
-	if !totp.Validate(r.Code, r.Secret) {
-		return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
+	if r.Secret == "" || r.Code == "" || r.Password == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "password, secret and code required")
 	}
 	u, err := s.currentUser(c)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "user gone")
+	}
+	// Re-authenticate with the password so a leaked/stolen session token
+	// alone can't enrol an attacker-controlled 2FA secret (account lockout).
+	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+		s.secWarn("totp: wrong password on enable", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid password")
+	}
+	if !totp.Validate(r.Code, r.Secret) {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
 	}
 	plain, hashed, err := generateBackupCodes()
 	if err != nil {

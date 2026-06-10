@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -42,9 +41,36 @@ type Server struct {
 	Version      string
 	Features     features.Features
 	Mailer       *notify.Mailer
-	failedLogins sync.Map // login string → *atomic.Int64
+	throttle     *loginThrottle
+	throttleOnce sync.Once
+	dlTickets    *downloadTickets
+	dlOnce       sync.Once
+	bootTime     time.Time // tokens issued before this are rejected (set in Register)
 	procMu       sync.RWMutex
 	processing   map[string]map[string]bool // userID → processing path prefixes
+}
+
+// loginGuard lazily builds the login throttle. Lazy so a bare
+// Server{} (constructed directly in some unit tests) still works
+// without an explicit init step.
+func (s *Server) loginGuard() *loginThrottle {
+	s.throttleOnce.Do(func() {
+		if s.throttle == nil {
+			s.throttle = newLoginThrottle()
+		}
+	})
+	return s.throttle
+}
+
+// dlGuard lazily builds the download-ticket store. Same lazy-init
+// rationale as loginGuard.
+func (s *Server) dlGuard() *downloadTickets {
+	s.dlOnce.Do(func() {
+		if s.dlTickets == nil {
+			s.dlTickets = newDownloadTickets()
+		}
+	})
+	return s.dlTickets
 }
 
 // secWarn emits a structured WARN security event. No-ops when Log is nil
@@ -52,17 +78,6 @@ type Server struct {
 func (s *Server) secWarn(msg string, args ...any) {
 	if s.Log != nil {
 		s.Log.LogAttrs(slog.LevelWarn, msg, args...)
-	}
-}
-
-func (s *Server) incFailed(login string) int64 {
-	v, _ := s.failedLogins.LoadOrStore(login, new(atomic.Int64))
-	return v.(*atomic.Int64).Add(1)
-}
-
-func (s *Server) resetFailed(login string) {
-	if v, ok := s.failedLogins.Load(login); ok {
-		v.(*atomic.Int64).Store(0)
 	}
 }
 
@@ -85,11 +100,29 @@ func (s *Server) Register(app *fiber.App) {
 	if s.Version != "dev" {
 		bootTime = time.Now().Truncate(time.Second)
 	}
+	s.bootTime = bootTime // wsHandler re-runs the same check during first-message auth
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true, "version": s.Version, "features": s.Features})
 	})
 	app.Post("/auth/login", s.login)
+	// Zip stream authorized by a single-use ticket (not the JWT). Lives
+	// OUTSIDE /api on purpose: the /api group's AuthMiddleware runs for
+	// every /api/* path, so a no-JWT route must sit at top level. The
+	// browser mints a ticket at POST /api/files/download-zip-ticket
+	// (authenticated) then navigates here — keeping the JWT out of the URL.
+	app.Get("/download-zip", s.downloadZipByTicket)
+	// WebSocket push channel. Also top-level (no /api auth): the handshake
+	// can't carry an Authorization header and we no longer accept the JWT
+	// as a query param, so the client authenticates by sending
+	// {"type":"auth","token":"<jwt>"} as its first frame — validated in
+	// wsHandler within a short deadline before joining the hub.
+	app.Get("/ws", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	}, websocket.New(s.wsHandler))
 
 	api := app.Group("/api", AuthMiddleware(s.Cfg.JWTSecret, bootTime, s.Log), s.TokenVersionMiddleware())
 	api.Get("/me", s.me)
@@ -102,7 +135,8 @@ func (s *Server) Register(app *fiber.App) {
 	files.Get("/", s.listFiles)
 	files.Delete("/", s.deleteFile)
 	files.Get("/download", s.download)
-	files.Get("/download-zip", s.downloadZip)
+	files.Get("/download-zip", s.downloadZip) // header-authed (desktop)
+	files.Post("/download-zip-ticket", s.downloadZipTicket)
 	files.Post("/upload/init", s.uploadInit)
 	files.Post("/upload/complete", s.uploadComplete)
 	files.Post("/upload/abort", s.uploadAbort)
@@ -110,19 +144,6 @@ func (s *Server) Register(app *fiber.App) {
 	files.Post("/rename", s.renameFile)
 	files.Post("/recompute-usage", s.recomputeUsage)
 	files.Get("/preview", s.previewFile)
-
-	// WebSocket for push notifications. The JWT middleware already ran
-	// when the route matched (ws handshakes hit /api/ws), so `UID(c)`
-	// is populated. We copy it into a plain-string local key that the
-	// ws handler can read — the typed ctxKey constant is unexported and
-	// websocket.Conn doesn't share the fiber.Ctx type.
-	api.Get("/ws", func(c *fiber.Ctx) error {
-		if websocket.IsWebSocketUpgrade(c) {
-			c.Locals("uid", UID(c))
-			return c.Next()
-		}
-		return fiber.ErrUpgradeRequired
-	}, websocket.New(s.wsHandler))
 
 	totp := api.Group("/totp")
 	totp.Get("/setup", s.totpSetup)

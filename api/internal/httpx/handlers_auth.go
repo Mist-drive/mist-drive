@@ -3,6 +3,7 @@ package httpx
 import (
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,20 +35,32 @@ func (s *Server) login(c *fiber.Ctx) error {
 	if serverVer != "dev" && clientVer != "" && clientVer != "dev" && clientVer != serverVer {
 		return fiber.NewError(fiber.StatusBadRequest, "client outdated: please download version "+s.Version)
 	}
+	// Reject early if this login or source IP is locked out from too
+	// many failures.
+	if locked, retry := s.loginLocked(r.Login, clientIP(c)); locked {
+		s.secWarn("auth: login locked out", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"), "retryAfter", retry.Round(time.Second).String())
+		c.Set("Retry-After", strconv.Itoa(int(retry.Round(time.Second).Seconds())))
+		return fiber.NewError(fiber.StatusTooManyRequests, "too many failed attempts, try again later")
+	}
 	u, err := s.Users.GetByLogin(r.Login)
 	if err != nil {
+		// Spend a bcrypt comparison on a dummy hash so unknown-user
+		// responses take the same time as wrong-password ones — no
+		// timing oracle for username enumeration.
+		auth.DummyVerify(r.Password)
+		s.loginFail(r.Login, clientIP(c))
 		s.secWarn("auth: unknown user", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 	}
 	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
 		s.secWarn("auth: wrong password", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
-		count := s.incFailed(u.Login)
+		count := s.loginFail(u.Login, clientIP(c))
 		if s.Mailer != nil && s.Mailer.Enabled() && count%3 == 0 {
 			if admin, err2 := s.Users.GetByLogin(s.Cfg.AdminLogin); err2 == nil && admin.Email != "" {
 				ip, ua, login, to := clientIP(c), c.Get("User-Agent"), r.Login, admin.Email
 				s.Log.LogAttrs(slog.LevelInfo, "email: sending failed-login alert", "login", login, "ip", ip, "count", count, "to", to)
 				go func() {
-					if err3 := s.Mailer.SendFailedLogin(to, login, ip, ua, count, time.Now()); err3 != nil {
+					if err3 := s.Mailer.SendFailedLogin(to, login, ip, ua, int64(count), time.Now()); err3 != nil {
 						s.secWarn("email: SendFailedLogin failed", "err", err3)
 					} else {
 						s.Log.LogAttrs(slog.LevelInfo, "email: failed-login alert sent", "login", login, "to", to)
@@ -72,6 +85,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 			}
 			ok, backupConsumed := verifyTOTP(u, r.TOTPCode)
 			if !ok {
+				s.loginFail(u.Login, clientIP(c))
 				s.secWarn("auth: invalid TOTP code", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 				return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
 			}
@@ -87,7 +101,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 	newIP := isNewIP(clientIP(c), u.LoginHistory)
 	u.AppendLoginRecord(clientIP(c), c.Get("User-Agent"))
 	_ = s.Users.Update(u)
-	s.resetFailed(u.Login)
+	s.loginSucceeded(u.Login)
 	if s.Mailer != nil && s.Mailer.Enabled() && newIP && u.Email != "" {
 		ip, ua, uid, to := clientIP(c), c.Get("User-Agent"), u.ID, u.Email
 		s.Log.LogAttrs(slog.LevelInfo, "email: sending new-IP notification", "uid", uid, "ip", ip, "to", to)
@@ -172,6 +186,9 @@ func (s *Server) updateEmail(c *fiber.Ctx) error {
 	}
 	if r.Email != "" && !strings.Contains(r.Email, "@") {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid email")
+	}
+	if s.Users.EmailTaken(r.Email, u.ID) {
+		return fiber.NewError(fiber.StatusConflict, "email already in use")
 	}
 	u.Email = r.Email
 	if err := s.Users.Update(u); err != nil {

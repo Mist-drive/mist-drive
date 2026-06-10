@@ -38,7 +38,7 @@ func totpEnable(t *testing.T, f *unitFixture) (secret string, backupCodes []stri
 		t.Fatal(err)
 	}
 	resp := doUnit(t, f.app, "POST", "/api/totp/enable", map[string]any{
-		"secret": secret, "code": code,
+		"secret": secret, "code": code, "password": "pw",
 	}, f.userToken)
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -88,7 +88,22 @@ func TestTOTPEnable_InvalidCode(t *testing.T) {
 	f := newUnitFixture(t)
 	secret, _ := totpSetup(t, f)
 	resp := doUnit(t, f.app, "POST", "/api/totp/enable", map[string]any{
-		"secret": secret, "code": "000000",
+		"secret": secret, "code": "000000", "password": "pw",
+	}, f.userToken)
+	if resp.StatusCode != 401 {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestTOTPEnable_WrongPassword(t *testing.T) {
+	f := newUnitFixture(t)
+	secret, _ := totpSetup(t, f)
+	code, err := totp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := doUnit(t, f.app, "POST", "/api/totp/enable", map[string]any{
+		"secret": secret, "code": code, "password": "wrong",
 	}, f.userToken)
 	if resp.StatusCode != 401 {
 		t.Fatalf("want 401, got %d", resp.StatusCode)

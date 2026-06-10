@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -8,6 +9,27 @@ import (
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/users"
 )
+
+const minPasswordLen = 8
+
+// validLogin enforces a conservative login charset/length. The login is
+// only an in-memory index key (user files on disk are named by UUID, not
+// login), so the constraint is about sane input, not path safety. We
+// allow email-style logins: letters, digits, '.', '-', '_', '@', '+'.
+func validLogin(login string) bool {
+	if len(login) < 3 || len(login) > 64 {
+		return false
+	}
+	for _, r := range login {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == '_' || r == '@' || r == '+':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 type createUserReq struct {
 	Login      string `json:"login"`
@@ -31,8 +53,21 @@ func (s *Server) adminListUsers(c *fiber.Ctx) error {
 
 func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 	var r createUserReq
-	if err := c.BodyParser(&r); err != nil || r.Login == "" || r.Password == "" {
+	if err := c.BodyParser(&r); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
+	}
+	r.Login = strings.TrimSpace(r.Login)
+	if !validLogin(r.Login) {
+		return fiber.NewError(fiber.StatusBadRequest, "login must be 3-64 chars: letters, digits, or . - _ @ +")
+	}
+	if len(r.Password) < minPasswordLen {
+		return fiber.NewError(fiber.StatusBadRequest, "password must be at least 8 characters")
+	}
+	if r.Email != "" && !strings.Contains(r.Email, "@") {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid email")
+	}
+	if s.Users.EmailTaken(r.Email, "") {
+		return fiber.NewError(fiber.StatusConflict, "email already in use")
 	}
 	if r.QuotaBytes <= 0 {
 		r.QuotaBytes = s.Cfg.DefaultQuota
