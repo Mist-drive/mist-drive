@@ -65,6 +65,7 @@ type Settings struct {
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
 	StartOnLaunch        bool         `json:"startOnLaunch"`
 	CloseToTray          bool         `json:"closeToTray"`
+	Notifications        bool         `json:"notifications"`
 }
 
 // diskFormat is the actual JSON shape on disk. Settings are partitioned
@@ -74,7 +75,8 @@ type diskFormat struct {
 	ActiveEnv     string                  `json:"activeEnv"`
 	Environments  map[string]*EnvSettings `json:"environments"`
 	StartOnLaunch bool                    `json:"startOnLaunch"`
-	CloseToTray   *bool                   `json:"closeToTray"` // nil = default true (hide to tray)
+	CloseToTray   *bool                   `json:"closeToTray"`   // nil = default true (hide to tray)
+	Notifications *bool                   `json:"notifications"` // nil = default true (OS notifications on)
 }
 
 func diskDefaults() diskFormat {
@@ -209,6 +211,10 @@ func (st *Store) Get() Settings {
 	if st.d.CloseToTray != nil {
 		closeToTray = *st.d.CloseToTray
 	}
+	notifications := true
+	if st.d.Notifications != nil {
+		notifications = *st.d.Notifications
+	}
 	return Settings{
 		APIURL:               st.d.ActiveEnv,
 		JWT:                  e.JWT,
@@ -220,6 +226,7 @@ func (st *Store) Get() Settings {
 		MaxUploadRateKBps:    e.MaxUploadRateKBps,
 		StartOnLaunch:        st.d.StartOnLaunch,
 		CloseToTray:          closeToTray,
+		Notifications:        notifications,
 	}
 }
 
@@ -236,6 +243,7 @@ func (st *Store) Save(s Settings) error {
 	st.d.ActiveEnv = url
 	st.d.StartOnLaunch = s.StartOnLaunch
 	st.d.CloseToTray = &s.CloseToTray
+	st.d.Notifications = &s.Notifications
 
 	e, ok := st.d.Environments[url]
 	if !ok {

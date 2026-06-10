@@ -166,7 +166,7 @@ export default function SyncPanel() {
         marginBottom: '.5rem',
       }}>{t('sync.behavior')}</h4>
       <label style={{
-        display: 'inline-flex',
+        display: 'flex',
         alignItems: 'center',
         gap: '.5rem',
         cursor: 'pointer',
@@ -187,6 +187,29 @@ export default function SyncPanel() {
           style={{ width: 'auto', margin: 0 }}
         />
         {t('sync.closeToTray')}
+      </label>
+      <label style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '.5rem',
+        cursor: 'pointer',
+        fontSize: '0.9rem',
+        textTransform: 'none',
+        letterSpacing: 'normal',
+        color: 'var(--text-primary)',
+        margin: '.6rem 0 0',
+      }}>
+        <input
+          type="checkbox"
+          checked={s.notifications}
+          onChange={async () => {
+            s.notifications = !s.notifications
+            await SaveSettings(s)
+            await refreshSettings()
+          }}
+          style={{ width: 'auto', margin: 0 }}
+        />
+        {t('sync.notifications')}
       </label>
     </div>
   )

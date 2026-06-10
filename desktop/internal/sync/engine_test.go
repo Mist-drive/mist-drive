@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -86,6 +87,87 @@ func newTestEngine(t *testing.T, api API, folders []settings.SyncFolder) *Engine
 		t.Fatal(err)
 	}
 	return New(api, st, func(string) {})
+}
+
+func TestNotifySummaryOnActivity(t *testing.T) {
+	dir := t.TempDir()
+	local := filepath.Join(dir, "root")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eng := newTestEngine(t, &fakeAPI{}, []settings.SyncFolder{{
+		Local: local, RemotePrefix: "p/", Upload: true, Download: true, Enabled: true,
+	}})
+	var notes []string
+	eng.SetNotifier(func(_, body string) { notes = append(notes, body) })
+	eng.reconcileAll(context.Background())
+	if len(notes) != 1 {
+		t.Fatalf("want 1 summary notification, got %d: %v", len(notes), notes)
+	}
+	if notes[0] != "Uploaded a.txt" {
+		t.Fatalf("want single-file summary 'Uploaded a.txt', got %q", notes[0])
+	}
+}
+
+func TestNotifyMultiFileSummaryUsesCount(t *testing.T) {
+	dir := t.TempDir()
+	local := filepath.Join(dir, "root")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(local, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng := newTestEngine(t, &fakeAPI{}, []settings.SyncFolder{{
+		Local: local, RemotePrefix: "p/", Upload: true, Download: true, Enabled: true,
+	}})
+	var notes []string
+	eng.SetNotifier(func(_, body string) { notes = append(notes, body) })
+	eng.reconcileAll(context.Background())
+	if len(notes) != 1 {
+		t.Fatalf("want 1 coalesced notification, got %d: %v", len(notes), notes)
+	}
+	// 3 uploads → "Uploaded <first> +2 more" (one toast, not three).
+	if notes[0] != "Uploaded a.txt +2 more" {
+		t.Fatalf("unexpected multi-file summary: %q", notes[0])
+	}
+}
+
+func TestNotifyIdlePassIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	local := filepath.Join(dir, "root")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	eng := newTestEngine(t, &fakeAPI{}, []settings.SyncFolder{{
+		Local: local, RemotePrefix: "p/", Upload: true, Download: true, Enabled: true,
+	}})
+	n := 0
+	eng.SetNotifier(func(_, _ string) { n++ })
+	eng.reconcileAll(context.Background()) // nothing to do
+	if n != 0 {
+		t.Fatalf("idle pass must not notify, got %d", n)
+	}
+}
+
+func TestNotifyErrorDeduped(t *testing.T) {
+	eng := newTestEngine(t, &fakeAPI{}, nil)
+	var notes []string
+	eng.SetNotifier(func(_, body string) { notes = append(notes, body) })
+	eng.setErr(errors.New("boom"))
+	eng.setErr(errors.New("boom")) // same signature → suppressed
+	if len(notes) != 1 {
+		t.Fatalf("want 1 (deduped), got %d: %v", len(notes), notes)
+	}
+	eng.setErr(errors.New("different")) // new signature → notifies
+	if len(notes) != 2 {
+		t.Fatalf("want 2 after a new error, got %d: %v", len(notes), notes)
+	}
 }
 
 func TestReconcileUploadsLocalOnlyFile(t *testing.T) {

@@ -84,6 +84,17 @@ type Engine struct {
 	cancel context.CancelFunc
 	status Status
 	log    []LogEntry
+	// notify fires OS notifications (set by the desktop layer; nil = off).
+	notify func(title, body string)
+	// lastErrKey dedupes error notifications so a persistent failure
+	// (e.g. server unreachable) doesn't re-notify on every 30s pass.
+	// Cleared after a clean pass so a recurrence notifies again.
+	lastErrKey string
+	// passUp/passDown collect the base filenames moved in the current
+	// pass so a single-file sync can name the file in the notification
+	// instead of just a count. Reset at the start of each pass.
+	passUp   []string
+	passDown []string
 	// nudge is a 1-buffered channel that external callers (e.g. the
 	// websocket listener receiving a "files-changed" push) use to
 	// request an immediate reconcile without waiting for the 30s tick.
@@ -95,6 +106,61 @@ func New(api API, st *settings.Store, log func(string)) *Engine {
 		log = func(string) {}
 	}
 	return &Engine{api: api, st: st, logger: log, nudge: make(chan struct{}, 1)}
+}
+
+// SetNotifier installs the OS-notification callback, called once at
+// wiring time before Start. Pass nil to disable. The callback itself is
+// responsible for honoring any user "notifications off" setting.
+func (e *Engine) SetNotifier(fn func(title, body string)) {
+	e.mu.Lock()
+	e.notify = fn
+	e.mu.Unlock()
+}
+
+// notifySummary fires a post-pass activity summary. These are discrete
+// events (real files moved), so they always fire — no dedupe.
+func (e *Engine) notifySummary(title, body string) {
+	e.mu.Lock()
+	fn := e.notify
+	e.mu.Unlock()
+	if fn != nil {
+		fn(title, body)
+	}
+}
+
+// notifyErrOnce fires an error notification deduped by key, so a steady-
+// state failure doesn't spam one notification per pass.
+func (e *Engine) notifyErrOnce(key, title, body string) {
+	e.mu.Lock()
+	fn := e.notify
+	if fn == nil || key == e.lastErrKey {
+		e.mu.Unlock()
+		return
+	}
+	e.lastErrKey = key
+	e.mu.Unlock()
+	fn(title, body)
+}
+
+// syncSummary renders a one-line "what happened this pass" string from
+// the base filenames moved. A single file is named directly; multiples
+// collapse to a count (with one example name so the toast still shows
+// something concrete).
+func syncSummary(up, down []string) string {
+	if len(up)+len(down) == 1 {
+		if len(up) == 1 {
+			return "Uploaded " + up[0]
+		}
+		return "Downloaded " + down[0]
+	}
+	switch {
+	case len(up) > 0 && len(down) > 0:
+		return fmt.Sprintf("Synced %d files (↑%d ↓%d)", len(up)+len(down), len(up), len(down))
+	case len(up) > 0:
+		return fmt.Sprintf("Uploaded %s +%d more", up[0], len(up)-1)
+	default:
+		return fmt.Sprintf("Downloaded %s +%d more", down[0], len(down)-1)
+	}
 }
 
 // Nudge asks the engine to run a reconcile pass as soon as possible.
@@ -308,6 +374,8 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 	e.status.Skipped = 0
 	e.status.Errors = 0
 	e.status.LastError = ""
+	e.passUp = e.passUp[:0]
+	e.passDown = e.passDown[:0]
 	e.mu.Unlock()
 
 	listResp, err := e.api.ListFiles()
@@ -336,7 +404,24 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
 	e.status.InFlight = ""
+	errs := e.status.Errors
+	// Copy the per-pass name slices so we can read them outside the lock.
+	up := append([]string(nil), e.passUp...)
+	down := append([]string(nil), e.passDown...)
+	if errs == 0 {
+		e.lastErrKey = "" // clean pass — let the next error notify again
+	}
 	e.mu.Unlock()
+
+	// Coalesce a whole pass into at most one activity + one error
+	// notification, so a 200-file sync doesn't fire 200 toasts.
+	if len(up) > 0 || len(down) > 0 {
+		e.notifySummary("Mist Drive", syncSummary(up, down))
+	}
+	if errs > 0 {
+		e.notifyErrOnce(fmt.Sprintf("pass-errs:%d", errs), "Mist Drive — sync issues",
+			fmt.Sprintf("%d file(s) failed to sync", errs))
+	}
 }
 
 type localFile struct {
@@ -489,6 +574,7 @@ func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 	e.mu.Lock()
 	e.status.Uploaded++
 	e.status.TotalUploaded++
+	e.passUp = append(e.passUp, filepath.Base(rel))
 	e.mu.Unlock()
 	return nil
 }
@@ -527,6 +613,7 @@ func (e *Engine) download(f settings.SyncFolder, rel string) error {
 	e.mu.Lock()
 	e.status.Downloaded++
 	e.status.TotalDownloaded++
+	e.passDown = append(e.passDown, filepath.Base(rel))
 	e.mu.Unlock()
 	return nil
 }
@@ -537,14 +624,16 @@ func (e *Engine) download(f settings.SyncFolder, rel string) error {
 // but lets reconcile keep going.
 func (e *Engine) setErr(err error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.status.LastError = err.Error()
-	e.logger("sync error: " + err.Error())
 	entry := LogEntry{Time: time.Now(), Action: "error", Error: err.Error()}
 	if len(e.log) >= maxLogEntries {
 		e.log = e.log[1:]
 	}
 	e.log = append(e.log, entry)
+	e.mu.Unlock()
+	e.logger("sync error: " + err.Error())
+	// Fatal pass errors abort before the end-of-pass summary, so notify here.
+	e.notifyErrOnce("fatal:"+err.Error(), "Mist Drive — sync error", err.Error())
 }
 
 func (e *Engine) recordErr(err error) {

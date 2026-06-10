@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gen2brain/beeep"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"mist-drive-desktop/internal/apiclient"
 	"mist-drive-desktop/internal/settings"
@@ -73,6 +74,17 @@ func NewApp(ver string) *App {
 	}
 	a.engine = syncpkg.New(api, st, func(msg string) {
 		fmt.Println("[sync]", msg)
+	})
+	// Surface sync activity/errors as native OS notifications. Gated by
+	// the per-user setting (read fresh each time so toggling takes effect
+	// immediately, no restart).
+	a.engine.SetNotifier(func(title, body string) {
+		if !a.settings.Get().Notifications {
+			return
+		}
+		if err := beeep.Notify(title, body, ""); err != nil {
+			fmt.Println("[notify]", err)
+		}
 	})
 	// The ws client's only job is to translate server pushes into two
 	// side effects: kick the sync engine for an immediate reconcile,

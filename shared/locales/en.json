@@ -175,6 +175,7 @@
     "maxUploadRate": "Max upload rate (KB/s, 0 = ∞)",
     "save": "Save",
     "closeToTray": "Close to Tray",
+    "notifications": "Desktop notifications",
     "removeFolderConfirm": "Remove this sync folder? Local files are kept on disk.",
     "close": "Close",
     "noActivity": "No activity yet."

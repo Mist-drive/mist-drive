@@ -186,6 +186,7 @@ export namespace settings {
 	    maxUploadRateKBps: number;
 	    startOnLaunch: boolean;
 	    closeToTray: boolean;
+	    notifications: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -203,6 +204,7 @@ export namespace settings {
 	        this.maxUploadRateKBps = source["maxUploadRateKBps"];
 	        this.startOnLaunch = source["startOnLaunch"];
 	        this.closeToTray = source["closeToTray"];
+	        this.notifications = source["notifications"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
