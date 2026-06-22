@@ -186,6 +186,17 @@ func (c *Client) StatObject(ctx context.Context, bucket, key string) (int64, err
 	return info.Size, nil
 }
 
+// HasSourceMeta returns true when the object carries the mist-source-size user
+// metadata key, which means it was already server-compressed by us.
+func (c *Client) HasSourceMeta(ctx context.Context, bucket, key string) (bool, error) {
+	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return false, err
+	}
+	return info.UserMetadata["Mist-Source-Size"] != "" ||
+		info.UserMetadata["X-Amz-Meta-Mist-Source-Size"] != "", nil
+}
+
 // StatObjectFull returns size and ETag. Used by the compress pipeline to detect
 // if an object was replaced between enqueue and the replace step.
 func (c *Client) StatObjectFull(ctx context.Context, bucket, key string) (int64, string, error) {
