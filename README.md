@@ -1,9 +1,9 @@
 # Mist Drive
 
-[![CI](https://github.com/creativeyann17/mist-drive/actions/workflows/ci.yml/badge.svg)](https://github.com/creativeyann17/mist-drive/actions/workflows/ci.yml)
-[![GitHub release](https://img.shields.io/github/v/release/creativeyann17/mist-drive)](https://github.com/creativeyann17/mist-drive/releases/latest)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/creativeyann17/mist-drive?filename=api%2Fgo.mod)](api/go.mod)
-[![License](https://img.shields.io/github/license/creativeyann17/mist-drive)](LICENSE)
+[![CI](https://github.com/Mist-drive/mist-drive/actions/workflows/ci.yml/badge.svg)](https://github.com/Mist-drive/mist-drive/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/Mist-drive/mist-drive)](https://github.com/Mist-drive/mist-drive/releases/latest)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Mist-drive/mist-drive?filename=api%2Fgo.mod)](api/go.mod)
+[![License](https://img.shields.io/github/license/Mist-drive/mist-drive)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-orange?logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/creativeyann17)
 
 A self-hosted personal drive. Upload, organise, preview, and sync your files — on your own server, under your own rules.
