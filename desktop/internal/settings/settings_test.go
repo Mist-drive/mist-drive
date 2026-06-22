@@ -87,7 +87,7 @@ func TestLegacyMigration(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "settings.json")
 	legacy := `{
-		"apiUrl": "https://drive.myvps.com",
+		"apiUrl": "https://drive.example.com",
 		"jwt": "old-token",
 		"login": "alice",
 		"folders": [{"local": "/home/alice/docs", "remotePrefix": "docs/", "upload": true, "download": false, "enabled": true}],
@@ -104,7 +104,7 @@ func TestLegacyMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := st.Get()
-	if got.APIURL != "https://drive.myvps.com" {
+	if got.APIURL != "https://drive.example.com" {
 		t.Errorf("apiUrl = %s", got.APIURL)
 	}
 	if got.JWT != "old-token" {

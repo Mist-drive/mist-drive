@@ -61,24 +61,28 @@ func main() {
 	go gcStaleUploads(cfg, uploadStore, s3c, appLog.With("component", "upload-gc"))
 
 	eventsHub := events.NewHub()
-	compressQueue := compress.NewQueue(filepath.Join(cfg.DataDir, "compress-queue.json"))
 
 	// srv is constructed before the compress engine so it can be passed as
 	// a ProcessingTracker — the engine marks keys in-progress, the file
 	// listing API returns them, and the UI shows ⏳.
 	srv := &httpx.Server{
 		Cfg: cfg, Users: userStore, S3: s3c,
-		Uploads:       uploadStore,
-		Reservations:  quota.New(),
-		Events:        eventsHub,
-		Log:           appLog.With("component", "auth"),
-		Version:       Version,
-		Features:      features.Current(),
-		Mailer:        notify.New(*cfg),
-		CompressQueue: compressQueue,
+		Uploads:      uploadStore,
+		Reservations: quota.New(),
+		Events:       eventsHub,
+		Log:          appLog.With("component", "auth"),
+		Version:      Version,
+		Features:     features.Current(),
+		Mailer:       notify.New(*cfg),
 	}
 
-	go compress.Start(cfg, compressQueue, s3c, eventsHub, srv, userStore, appLog.With("component", "compress"))
+	// COMPRESS_WORKERS=0 (default) disables compression entirely — no queue
+	// is created and uploads are never enqueued, saving disk and CPU.
+	if cfg.CompressWorkers > 0 {
+		compressQueue := compress.NewQueue(filepath.Join(cfg.DataDir, "compress-queue.json"))
+		srv.CompressQueue = compressQueue
+		go compress.Start(cfg, compressQueue, s3c, eventsHub, srv, userStore, appLog.With("component", "compress"))
+	}
 
 	app := fiber.New(fiber.Config{
 		AppName:               "mist-drive",

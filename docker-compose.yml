@@ -1,8 +1,8 @@
 # mist-drive local / single-node compose.
 #
 # No Traefik, no TLS, no self-signed certs — the deployment target is
-# an existing stack (e.g. cy17-single-node-services-stack) that already
-# terminates HTTPS and routes by hostname. This file just brings up
+# an existing reverse-proxy stack that already terminates HTTPS and routes
+# by hostname. This file just brings up
 # the two things mist-drive actually needs: the unified app container
 # and MinIO. Your outer reverse proxy points `drive.<domain>` at
 # mist-drive:3000 and `s3.<domain>` at minio:9000.

@@ -1,0 +1,213 @@
+# mist-drive — production VPS deployment with Traefik v3 + Let's Encrypt
+#
+# Exposes two subdomains:
+#   drive.${DOMAIN}  — mist-drive app (API + embedded SPA)
+#   s3.${DOMAIN}     — MinIO S3 endpoint (presigned PUT/GET from the browser)
+#
+# Prerequisites:
+#   - Ports 80 and 443 open on the host
+#   - DNS A records pointing drive.${DOMAIN} and s3.${DOMAIN} to the server IP
+#   - Copy .env.example to .env and fill in all required values
+#
+# Usage: docker compose up -d
+
+services:
+
+  # ===================
+  # TRAEFIK
+  # ===================
+  traefik:
+    image: traefik:v3.6.6
+    container_name: mist-traefik
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Trust proxy headers only from loopback and RFC1918 ranges so that
+      # a spoofed X-Forwarded-For from the internet can't bypass rate limiting.
+      - "--entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      - "--entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      # Redirect all HTTP to HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entryPoint.permanent=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Let's Encrypt — HTTP-01 challenge (no extra ports needed)
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt_data:/letsencrypt
+    restart: always
+    mem_limit: 64m
+
+  # ===================
+  # MIST-DRIVE
+  # ===================
+  mist-drive:
+    image: creativeyann17/mist-drive:latest
+    container_name: mist-drive
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+
+      # --- Required ---
+      # Generate with: openssl rand -base64 48
+      JWT_SECRET: ${JWT_SECRET}
+      # Initial admin account — change the password after first login
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+      # --- S3 / MinIO ---
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_USE_SSL: "false"
+      # Public hostname the browser uses for presigned PUT/GET URLs.
+      # Must match the s3.${DOMAIN} DNS record and Traefik router below.
+      PUBLIC_S3_HOST: s3.${DOMAIN}
+
+      # --- Quotas & limits ---
+      # Per-user storage quota in bytes. Default: 10 GiB (10737418240)
+      DEFAULT_QUOTA_BYTES: ${DEFAULT_QUOTA_BYTES:-10737418240}
+      # How long a multipart upload session stays alive. Default: 6h
+      UPLOAD_TTL_HOURS: ${UPLOAD_TTL_HOURS:-6}
+      # Max size of a folder ZIP download. Default: 20 GiB
+      MAX_ZIP_BYTES: ${MAX_ZIP_BYTES:-21474836480}
+      # Max wall-time for streaming one folder ZIP. Default: 30m
+      ZIP_STREAM_TIMEOUT: ${ZIP_STREAM_TIMEOUT:-30m}
+
+      # --- JWT ---
+      JWT_TTL: ${JWT_TTL:-24h}
+
+      # --- Logging ---
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # --- Email notifications (all optional — leave blank to disable) ---
+      # Triggers: new IP login (notifies the user), 3 failed logins (notifies admin)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      # Base URL used in email links, e.g. https://drive.example.com
+      PUBLIC_URL: ${PUBLIC_URL:-}
+
+      # --- Background compression (disabled by default) ---
+      # Set COMPRESS_WORKERS to 1+ to enable background re-compression of ZIPs
+      # and JPEGs after upload. 0 (default) disables the feature entirely.
+      # COMPRESS_WORKERS: 1
+      # Threads per worker used by the go-delta library. Default: 1
+      # COMPRESS_THREADS: 1
+      # ZIP compression level 1–9. Default: 9 (max ratio, more CPU)
+      # COMPRESS_LEVEL: 9
+      # JPEG re-encode quality 1–100. Default: 90
+      # Files already at or below this quality are skipped automatically.
+      # COMPRESS_JPEG_QUALITY: 90
+
+    volumes:
+      - mist_data:/app/data
+      - ./logs/mist-drive:/app/logs
+    restart: always
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      # Rate limiting middleware (shared by API and UI routers)
+      - "traefik.http.middlewares.mist-ratelimit.ratelimit.average=500"
+      - "traefik.http.middlewares.mist-ratelimit.ratelimit.burst=1000"
+      - "traefik.http.middlewares.mist-ratelimit.ratelimit.period=1s"
+      # Gzip compression middleware (UI assets)
+      - "traefik.http.middlewares.mist-gzip.compress=true"
+      # Security headers middleware
+      - "traefik.http.middlewares.mist-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.mist-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.mist-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.mist-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.mist-headers.headers.browserXssFilter=true"
+      # API + auth + health + WS + ZIP download — rate limited, no gzip
+      - "traefik.http.routers.mist-api.rule=Host(`drive.${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/auth`) || Path(`/health`) || Path(`/ws`) || Path(`/download-zip`))"
+      - "traefik.http.routers.mist-api.entrypoints=web"
+      - "traefik.http.routers.mist-api.service=mist-drive"
+      - "traefik.http.routers.mist-api.middlewares=mist-ratelimit,mist-headers"
+      - "traefik.http.routers.mist-api-secure.rule=Host(`drive.${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/auth`) || Path(`/health`) || Path(`/ws`) || Path(`/download-zip`))"
+      - "traefik.http.routers.mist-api-secure.entrypoints=websecure"
+      - "traefik.http.routers.mist-api-secure.service=mist-drive"
+      - "traefik.http.routers.mist-api-secure.tls=true"
+      - "traefik.http.routers.mist-api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.mist-api-secure.middlewares=mist-ratelimit,mist-headers"
+      # SPA (everything else) — gzip enabled
+      - "traefik.http.routers.mist-ui.rule=Host(`drive.${DOMAIN}`)"
+      - "traefik.http.routers.mist-ui.entrypoints=web"
+      - "traefik.http.routers.mist-ui.service=mist-drive"
+      - "traefik.http.routers.mist-ui.middlewares=mist-gzip,mist-headers"
+      - "traefik.http.routers.mist-ui-secure.rule=Host(`drive.${DOMAIN}`)"
+      - "traefik.http.routers.mist-ui-secure.entrypoints=websecure"
+      - "traefik.http.routers.mist-ui-secure.service=mist-drive"
+      - "traefik.http.routers.mist-ui-secure.tls=true"
+      - "traefik.http.routers.mist-ui-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.mist-ui-secure.middlewares=mist-gzip,mist-headers"
+      - "traefik.http.services.mist-drive.loadbalancer.server.port=3000"
+
+  # ===================
+  # MINIO
+  # ===================
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: mist-minio
+    command: server /data --console-address ":9001"
+    environment:
+      # These credentials are also used as S3_ACCESS_KEY / S3_SECRET_KEY
+      # in the mist-drive service above.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Disable the MinIO web console in production
+      MINIO_BROWSER: "off"
+      # Transparent server-side compression. MinIO automatically skips
+      # already-compressed formats (zip, jpg, gz, mp4, …) so no CPU is
+      # wasted. Objects still report their original size via HEAD/GET,
+      # keeping mist-drive's per-user quota accounting consistent.
+      MINIO_COMPRESSION_ENABLE: "on"
+      MINIO_COMPRESSION_EXTENSIONS: "*"
+      MINIO_COMPRESSION_MIME_TYPES: "*"
+    volumes:
+      - minio_data:/data
+    restart: always
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      # S3 API endpoint — the browser PUTs presigned upload parts here directly
+      - "traefik.http.routers.mist-s3.rule=Host(`s3.${DOMAIN}`)"
+      - "traefik.http.routers.mist-s3.entrypoints=web"
+      - "traefik.http.routers.mist-s3.service=mist-s3"
+      - "traefik.http.routers.mist-s3-secure.rule=Host(`s3.${DOMAIN}`)"
+      - "traefik.http.routers.mist-s3-secure.entrypoints=websecure"
+      - "traefik.http.routers.mist-s3-secure.service=mist-s3"
+      - "traefik.http.routers.mist-s3-secure.tls=true"
+      - "traefik.http.routers.mist-s3-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mist-s3.loadbalancer.server.port=9000"
+
+volumes:
+  letsencrypt_data:
+  minio_data:
+  mist_data:
