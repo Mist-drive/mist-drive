@@ -19,6 +19,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
+	"github.com/yann/mist-drive/api/internal/compress"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/features"
@@ -31,16 +32,17 @@ import (
 )
 
 type Server struct {
-	Cfg          *config.Config
-	Users        *users.Store
-	S3           *s3x.Client
-	Uploads      *uploads.Store
-	Reservations *quota.Reservations
-	Events       *events.Hub
-	Log          *logger.Logger
-	Version      string
-	Features     features.Features
-	Mailer       *notify.Mailer
+	Cfg           *config.Config
+	Users         *users.Store
+	S3            *s3x.Client
+	Uploads       *uploads.Store
+	Reservations  *quota.Reservations
+	Events        *events.Hub
+	Log           *logger.Logger
+	Version       string
+	Features      features.Features
+	Mailer        *notify.Mailer
+	CompressQueue *compress.Queue
 	throttle     *loginThrottle
 	throttleOnce sync.Once
 	dlTickets    *downloadTickets

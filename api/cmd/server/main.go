@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yann/mist-drive/api/internal/auth"
+	"github.com/yann/mist-drive/api/internal/compress"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/features"
@@ -58,6 +60,26 @@ func main() {
 
 	go gcStaleUploads(cfg, uploadStore, s3c, appLog.With("component", "upload-gc"))
 
+	eventsHub := events.NewHub()
+	compressQueue := compress.NewQueue(filepath.Join(cfg.DataDir, "compress-queue.json"))
+
+	// srv is constructed before the compress engine so it can be passed as
+	// a ProcessingTracker — the engine marks keys in-progress, the file
+	// listing API returns them, and the UI shows ⏳.
+	srv := &httpx.Server{
+		Cfg: cfg, Users: userStore, S3: s3c,
+		Uploads:       uploadStore,
+		Reservations:  quota.New(),
+		Events:        eventsHub,
+		Log:           appLog.With("component", "auth"),
+		Version:       Version,
+		Features:      features.Current(),
+		Mailer:        notify.New(*cfg),
+		CompressQueue: compressQueue,
+	}
+
+	go compress.Start(cfg, compressQueue, s3c, eventsHub, srv, userStore, appLog.With("component", "compress"))
+
 	app := fiber.New(fiber.Config{
 		AppName:               "mist-drive",
 		DisableStartupMessage: true,
@@ -98,16 +120,6 @@ func main() {
 		return err
 	})
 
-	srv := &httpx.Server{
-		Cfg: cfg, Users: userStore, S3: s3c,
-		Uploads:      uploadStore,
-		Reservations: quota.New(),
-		Events:       events.NewHub(),
-		Log:          appLog.With("component", "auth"),
-		Version:      Version,
-		Features:     features.Current(),
-		Mailer:       notify.New(*cfg),
-	}
 	srv.Register(app)
 
 	// Embedded SPA — must come AFTER srv.Register so API/auth/ws

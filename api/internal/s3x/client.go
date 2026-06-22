@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -91,11 +92,20 @@ func (c *Client) RemoveBucket(ctx context.Context, bucket string) error {
 
 func (c *Client) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectInfo, error) {
 	out := []ObjectInfo{}
-	for obj := range c.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+	for obj := range c.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, WithMetadata: true}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
-		out = append(out, ObjectInfo{Key: obj.Key, Size: obj.Size, ETag: obj.ETag, LastModified: obj.LastModified})
+		var sourceSize int64
+		// MinIO returns user metadata keys in canonical HTTP form with the
+		// x-amz-meta- prefix stripped, e.g. "Mist-Source-Size". Try both
+		// forms to stay resilient across SDK/server versions.
+		if v := obj.UserMetadata["Mist-Source-Size"]; v != "" {
+			sourceSize, _ = strconv.ParseInt(v, 10, 64)
+		} else if v := obj.UserMetadata["X-Amz-Meta-Mist-Source-Size"]; v != "" {
+			sourceSize, _ = strconv.ParseInt(v, 10, 64)
+		}
+		out = append(out, ObjectInfo{Key: obj.Key, Size: obj.Size, ETag: obj.ETag, LastModified: obj.LastModified, SourceSize: sourceSize})
 	}
 	return out, nil
 }
@@ -105,6 +115,7 @@ type ObjectInfo struct {
 	Size         int64     `json:"size"`
 	ETag         string    `json:"etag"`
 	LastModified time.Time `json:"lastModified"`
+	SourceSize   int64     `json:"sourceSize,omitempty"` // original size before server-side recompression
 }
 
 func (c *Client) PresignGet(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
@@ -173,6 +184,21 @@ func (c *Client) StatObject(ctx context.Context, bucket, key string) (int64, err
 		return 0, err
 	}
 	return info.Size, nil
+}
+
+// StatObjectFull returns size and ETag. Used by the compress pipeline to detect
+// if an object was replaced between enqueue and the replace step.
+func (c *Client) StatObjectFull(ctx context.Context, bucket, key string) (int64, string, error) {
+	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, "", err
+	}
+	return info.Size, info.ETag, nil
+}
+
+func (c *Client) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string, meta map[string]string) error {
+	_, err := c.mc.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType, UserMetadata: meta})
+	return err
 }
 
 func (c *Client) CopyObject(ctx context.Context, bucket, srcKey, dstKey string) error {

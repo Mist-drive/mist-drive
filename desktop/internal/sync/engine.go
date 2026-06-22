@@ -501,7 +501,11 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 			return
 		}
 		ro, ok := remote[rel]
-		if !ok || ro.Size != lf.size {
+		remoteSize := ro.Size
+		if ro.SourceSize > 0 {
+			remoteSize = ro.SourceSize
+		}
+		if !ok || remoteSize != lf.size {
 			// Local-only or size-mismatch → upload (if enabled).
 			if !doUpload {
 				e.bumpSkipped()

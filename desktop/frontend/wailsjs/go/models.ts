@@ -19,6 +19,7 @@ export namespace apiclient {
 	    size: number;
 	    etag: string;
 	    lastModified: string;
+	    sourceSize?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ObjectInfo(source);
@@ -30,6 +31,7 @@ export namespace apiclient {
 	        this.size = source["size"];
 	        this.etag = source["etag"];
 	        this.lastModified = source["lastModified"];
+	        this.sourceSize = source["sourceSize"];
 	    }
 	}
 	export class ListResponse {

@@ -1,10 +1,12 @@
 package httpx
 
 import (
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/yann/mist-drive/api/internal/compress"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/uploads"
@@ -91,9 +93,19 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	if err := s.S3.CompleteMultipart(c.Context(), st.Bucket, st.Key, st.UploadID, r.Parts); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	size, err := s.S3.StatObject(c.Context(), st.Bucket, st.Key)
+	size, etag, err := s.S3.StatObjectFull(c.Context(), st.Bucket, st.Key)
 	if err == nil {
 		_ = s.Users.AddUsedBytes(u.ID, size-oldSize)
+		ext := strings.ToLower(filepath.Ext(st.Key))
+		if s.CompressQueue != nil && (ext == ".zip" || ext == ".jpg" || ext == ".jpeg") {
+			_ = s.CompressQueue.Enqueue(compress.Item{
+				Bucket:  st.Bucket,
+				Key:     st.Key,
+				Size:    size,
+				ETag:    etag,
+				AddedAt: time.Now(),
+			})
+		}
 	}
 	s.Reservations.Release(u.ID, st.Size)
 	_ = s.Uploads.Delete(u.ID, r.UploadID)

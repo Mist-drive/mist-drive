@@ -261,6 +261,7 @@ type ObjectInfo struct {
 	Size         int64  `json:"size"`
 	ETag         string `json:"etag"`
 	LastModified string `json:"lastModified"`
+	SourceSize   int64  `json:"sourceSize,omitempty"`
 }
 
 type ListResponse struct {

@@ -459,7 +459,7 @@ function renderTree(
       const disabledStyle = { opacity: 0.35, cursor: 'not-allowed' as const, pointerEvents: 'none' as const }
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.processingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
@@ -508,7 +508,7 @@ function renderTree(
 
       const actionsTd = proc ? (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end' }}>
-          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.renamingInline')}</span>
+          <span className="muted" style={{ fontSize: '0.85rem' }}>{t('status.processingInline')}</span>
         </div>
       ) : (
         <div className="row" style={{ gap: '.4rem', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
