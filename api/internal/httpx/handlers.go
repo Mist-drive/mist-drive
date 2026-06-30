@@ -13,6 +13,7 @@ package httpx
 
 import (
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -81,6 +82,29 @@ func (s *Server) secWarn(msg string, args ...any) {
 	if s.Log != nil {
 		s.Log.LogAttrs(slog.LevelWarn, msg, args...)
 	}
+}
+
+// serverError logs an internal error with full detail (S3/MinIO/disk
+// messages can include bucket names, paths, or other backend internals
+// that shouldn't reach the client) and returns a generic 500. Use this
+// instead of fiber.NewError(fiber.StatusInternalServerError, err.Error())
+// so failures are actually diagnosable server-side instead of only
+// visible in the client's response body.
+func (s *Server) serverError(context string, err error) error {
+	if s.Log != nil {
+		s.Log.Error("%s: %v", context, err)
+	}
+	return fiber.NewError(fiber.StatusInternalServerError, "internal error")
+}
+
+// hasDotDotSegment reports whether key contains a ".." path segment —
+// a real parent-directory traversal, not merely consecutive dots inside
+// an otherwise legitimate name (e.g. "archive..tar.gz", "v1..2"). A
+// plain strings.Contains(key, "..") rejects those valid filenames;
+// splitting on "/" and comparing whole segments stays precise while
+// still catching "../", "/..", "a/../b", and a bare "..".
+func hasDotDotSegment(key string) bool {
+	return slices.Contains(strings.Split(key, "/"), "..")
 }
 
 func (s *Server) TokenVersionMiddleware() fiber.Handler {

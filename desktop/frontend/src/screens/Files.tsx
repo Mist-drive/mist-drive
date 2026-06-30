@@ -56,7 +56,6 @@ export default function Files({ onQuotaChange, user }: Props) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [uploadActive, setUploadActive] = useState<Record<string, UploadEntry>>({})
   const [uploadDone, setUploadDone] = useState(0)
-  const [, setTick] = useState(0)
   const [downloadingKeys, setDownloadingKeys] = useState<Set<string>>(new Set())
   const uploadTotalRef = useRef(0)
   const cancelledKeysRef = useRef<Set<string>>(new Set())
@@ -109,12 +108,6 @@ export default function Files({ onQuotaChange, user }: Props) {
     })
     return () => { unsubChange(); unsubErr(); unsubProgress() }
   }, [])
-
-  useEffect(() => {
-    if (Object.keys(uploadActive).length === 0) return
-    const t = setInterval(() => setTick((n) => n + 1), 500)
-    return () => clearInterval(t)
-  }, [uploadActive])
 
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))
 

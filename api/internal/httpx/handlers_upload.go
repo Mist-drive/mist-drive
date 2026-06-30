@@ -23,7 +23,17 @@ type initResp struct {
 	URLs     []s3x.PartURL `json:"urls"`
 }
 
-const defaultPartSize = 8 * 1024 * 1024
+const (
+	defaultPartSize = 8 * 1024 * 1024
+	// minPartSize mirrors the S3 multipart spec (parts under 5 MiB are
+	// only allowed as the final part). Rejecting smaller requested part
+	// sizes up front keeps the part-count math below bounded.
+	minPartSize = 5 * 1024 * 1024
+	// maxPartCount mirrors the S3 multipart spec's hard cap. Without this,
+	// a tiny partSize on a large upload makes InitMultipart presign one
+	// URL per part synchronously — unbounded CPU/memory per request.
+	maxPartCount = 10_000
+)
 
 func (s *Server) uploadInit(c *fiber.Ctx) error {
 	u, err := s.currentUser(c)
@@ -35,7 +45,7 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
 	}
 	r.Key = strings.TrimPrefix(strings.TrimSpace(r.Key), "/")
-	if r.Key == "" || strings.Contains(r.Key, "..") {
+	if r.Key == "" || hasDotDotSegment(r.Key) {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid key")
 	}
 	if s.isProcessingBlocked(u.ID, r.Key) {
@@ -56,11 +66,19 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 	if r.PartSize <= 0 {
 		r.PartSize = defaultPartSize
 	}
+	if r.PartSize < minPartSize && r.PartSize < r.Size {
+		s.Reservations.Release(u.ID, r.Size)
+		return fiber.NewError(fiber.StatusBadRequest, "partSize too small")
+	}
+	if partCount := (r.Size + r.PartSize - 1) / r.PartSize; partCount > maxPartCount {
+		s.Reservations.Release(u.ID, r.Size)
+		return fiber.NewError(fiber.StatusBadRequest, "too many parts for given partSize")
+	}
 	ttl := s.Cfg.UploadTTL
 	uploadID, urls, err := s.S3.InitMultipart(c.Context(), u.Bucket(), r.Key, r.Size, r.PartSize, ttl)
 	if err != nil {
 		s.Reservations.Release(u.ID, r.Size)
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("upload: init multipart", err)
 	}
 	_ = s.Uploads.Save(&uploads.State{
 		UserID: u.ID, UploadID: uploadID, Bucket: u.Bucket(), Key: r.Key,
@@ -91,7 +109,7 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	// atomically replaces it, so this is the only window to read the old size.
 	oldSize, _ := s.S3.StatObject(c.Context(), st.Bucket, st.Key)
 	if err := s.S3.CompleteMultipart(c.Context(), st.Bucket, st.Key, st.UploadID, r.Parts); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("upload: complete multipart", err)
 	}
 	size, etag, err := s.S3.StatObjectFull(c.Context(), st.Bucket, st.Key)
 	if err == nil {

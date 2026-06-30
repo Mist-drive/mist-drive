@@ -84,7 +84,7 @@ func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 		Email: r.Email,
 	}
 	if err := s.S3.EnsureBucket(c.Context(), u.Bucket()); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("admin: ensure bucket", err)
 	}
 	if err := s.Users.Create(u); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
@@ -104,7 +104,7 @@ func (s *Server) adminPatchQuota(c *fiber.Ctx) error {
 	}
 	u.QuotaBytes = r.QuotaBytes
 	if err := s.Users.Update(u); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("admin: patch quota", err)
 	}
 	return c.JSON(u.Public())
 }
@@ -120,7 +120,7 @@ func (s *Server) adminDeleteUser(c *fiber.Ctx) error {
 	}
 	_ = s.S3.RemoveBucket(c.Context(), u.Bucket())
 	if err := s.Users.Delete(id); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("admin: delete user", err)
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }

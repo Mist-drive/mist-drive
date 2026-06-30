@@ -192,7 +192,7 @@ func (s *Server) updateEmail(c *fiber.Ctx) error {
 	}
 	u.Email = r.Email
 	if err := s.Users.Update(u); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("auth: update email", err)
 	}
 	return c.JSON(u.Public())
 }
@@ -235,7 +235,7 @@ func (s *Server) changePassword(c *fiber.Ctx) error {
 	}
 	u.BcryptPwd = hash
 	if err := s.Users.Update(u); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("auth: change password", err)
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }
@@ -272,7 +272,7 @@ func (s *Server) logoutAll(c *fiber.Ctx) error {
 	}
 	u.TokenVersion++
 	if err := s.Users.Update(u); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("auth: logout-all", err)
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }

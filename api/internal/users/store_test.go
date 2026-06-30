@@ -1,6 +1,7 @@
 package users
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -33,13 +34,18 @@ func TestStore_CRUD(t *testing.T) {
 	if err != nil || got.ID != "id1" {
 		t.Fatalf("GetByLogin: %v %v", got, err)
 	}
-	got.UsedBytes = 42
+	// UsedBytes is intentionally not settable via Update — see
+	// TestStore_UpdatePreservesUsedBytes — so exercise a regular field.
+	got.Email = "alice@example.com"
 	if err := s.Update(got); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SetUsedBytes("id1", 42); err != nil {
+		t.Fatal(err)
+	}
 	got2, _ := s.GetByID("id1")
-	if got2.UsedBytes != 42 {
-		t.Fatalf("update not persisted in memory: %d", got2.UsedBytes)
+	if got2.Email != "alice@example.com" || got2.UsedBytes != 42 {
+		t.Fatalf("update not persisted in memory: email=%q usedBytes=%d", got2.Email, got2.UsedBytes)
 	}
 
 	// Reload from disk to confirm atomic write landed.
@@ -48,7 +54,7 @@ func TestStore_CRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	got3, err := s2.GetByLogin("alice")
-	if err != nil || got3.UsedBytes != 42 {
+	if err != nil || got3.Email != "alice@example.com" || got3.UsedBytes != 42 {
 		t.Fatalf("reload: %v %+v", err, got3)
 	}
 
@@ -108,6 +114,65 @@ func TestStore_GetReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestStore_GetReturnsDeepCopyOfSlices guards against a real bug: GetByID
+// used to return a struct copy whose slice fields still shared the
+// canonical entry's backing array. Handlers that mutate those slices in
+// place (e.g. removing a used TOTP backup code by re-slicing) would
+// corrupt data visible to any other concurrent reader of the same user.
+func TestStore_GetReturnsDeepCopyOfSlices(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	u := newTestUser("id1", "alice")
+	u.TOTPBackupCodes = []string{"a", "b", "c"}
+	u.TrustedDevices = []TrustedDevice{{ID: "dev1"}, {ID: "dev2"}}
+	u.LoginHistory = []LoginRecord{{IP: "1.1.1.1"}}
+	_ = s.Create(u)
+
+	got, _ := s.GetByID("id1")
+	// In-place element removal, same pattern as verifyTOTP/revokeDevice.
+	got.TOTPBackupCodes = append(got.TOTPBackupCodes[:1], got.TOTPBackupCodes[2:]...)
+	got.TrustedDevices = got.TrustedDevices[:0]
+	got.LoginHistory[0].IP = "mutated"
+
+	again, _ := s.GetByID("id1")
+	if len(again.TOTPBackupCodes) != 3 {
+		t.Fatalf("TOTPBackupCodes leaked in-place mutation: %v", again.TOTPBackupCodes)
+	}
+	if len(again.TrustedDevices) != 2 {
+		t.Fatalf("TrustedDevices leaked in-place mutation: %v", again.TrustedDevices)
+	}
+	if again.LoginHistory[0].IP != "1.1.1.1" {
+		t.Fatalf("LoginHistory leaked in-place mutation: %v", again.LoginHistory)
+	}
+}
+
+// TestStore_UpdatePreservesUsedBytes is the regression test for the
+// lost-update race: a handler that Get-then-mutates-then-Updates a user
+// (e.g. revoking a device) must not be able to clobber UsedBytes that
+// changed concurrently via AddUsedBytes/SetUsedBytes (e.g. an upload
+// completing) in between.
+func TestStore_UpdatePreservesUsedBytes(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	_ = s.Create(newTestUser("id1", "alice"))
+
+	stale, _ := s.GetByID("id1") // snapshot taken before the concurrent write below
+	if err := s.AddUsedBytes("id1", 500); err != nil {
+		t.Fatal(err)
+	}
+
+	stale.Email = "alice@example.com" // unrelated field, legitimately changed
+	if err := s.Update(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.GetByID("id1")
+	if got.UsedBytes != 500 {
+		t.Fatalf("Update clobbered concurrent UsedBytes: got %d, want 500", got.UsedBytes)
+	}
+	if got.Email != "alice@example.com" {
+		t.Fatalf("Update should still persist other fields: got email %q", got.Email)
+	}
+}
+
 func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := NewStore(dir)
@@ -139,6 +204,56 @@ func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
 	// Sanity: the underlying file exists and is well-formed JSON.
 	if _, err := filepath.Glob(filepath.Join(dir, "users", "*.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestStore_AddUsedBytesConcurrentSameUserNoLostUpdates proves the
+// per-user lock (lockUser) still fully serializes concurrent writers for
+// the SAME user even though different users now run in parallel.
+func TestStore_AddUsedBytesConcurrentSameUserNoLostUpdates(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	_ = s.Create(newTestUser("id1", "alice"))
+
+	var wg sync.WaitGroup
+	const n = 100
+	for range n {
+		wg.Go(func() {
+			_ = s.AddUsedBytes("id1", 1)
+		})
+	}
+	wg.Wait()
+
+	got, _ := s.GetByID("id1")
+	if got.UsedBytes != n {
+		t.Fatalf("lost updates: got UsedBytes=%d, want %d", got.UsedBytes, n)
+	}
+}
+
+// TestStore_DifferentUsersWriteInParallel is a smoke test that the
+// per-user lock doesn't accidentally still serialize unrelated users
+// (e.g. a regression back to a single global lock around I/O).
+func TestStore_DifferentUsersWriteInParallel(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	ids := []string{"id1", "id2", "id3", "id4", "id5"}
+	for i, id := range ids {
+		_ = s.Create(newTestUser(id, fmt.Sprintf("user%d", i)))
+	}
+
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Go(func() {
+			for range 20 {
+				_ = s.AddUsedBytes(id, 1)
+			}
+		})
+	}
+	wg.Wait()
+
+	for _, id := range ids {
+		got, _ := s.GetByID(id)
+		if got.UsedBytes != 20 {
+			t.Fatalf("user %s: lost updates, got UsedBytes=%d, want 20", id, got.UsedBytes)
+		}
 	}
 }
 

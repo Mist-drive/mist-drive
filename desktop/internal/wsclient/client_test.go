@@ -3,6 +3,7 @@ package wsclient
 import (
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestBuildWSURL(t *testing.T) {
@@ -42,5 +43,35 @@ func TestBuildWSURL(t *testing.T) {
 func TestBuildWSURLBadInput(t *testing.T) {
 	if _, err := buildWSURL("://bad"); err == nil {
 		t.Fatal("expected error on malformed url")
+	}
+}
+
+// TestNextBackoff_GrowsOnRejection guards against the original bug: a
+// connection that dies almost immediately after the auth frame (the
+// server rejecting a bad/expired/revoked token) must make backoff grow,
+// not reset — otherwise a stale token spins the loop hammering /ws as
+// fast as TCP handshakes allow.
+func TestNextBackoff_GrowsOnRejection(t *testing.T) {
+	backoff := 500 * time.Millisecond
+	for i, want := range []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		10 * time.Second, 10 * time.Second, // caps at 10s
+	} {
+		backoff = nextBackoff(backoff, false)
+		if backoff != want {
+			t.Fatalf("iteration %d: got %v, want %v", i, backoff, want)
+		}
+	}
+}
+
+// TestNextBackoff_ResetsOnSurvivedSession guards the other half: once a
+// connection proved itself authenticated (lasted past wsAuthGrace), the
+// next reconnect after a real disconnect should be fast again, not stuck
+// at whatever backoff a prior rejection streak grew to.
+func TestNextBackoff_ResetsOnSurvivedSession(t *testing.T) {
+	backoff := 10 * time.Second // simulate a fully backed-off state
+	backoff = nextBackoff(backoff, true)
+	if want := 500 * time.Millisecond; backoff != want {
+		t.Fatalf("got %v, want %v", backoff, want)
 	}
 }

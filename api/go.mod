@@ -3,6 +3,7 @@ module github.com/yann/mist-drive/api
 go 1.26
 
 require (
+	github.com/creativeyann17/go-delta v1.4.3
 	github.com/fasthttp/websocket v1.5.3
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/gofiber/websocket/v2 v2.2.1
@@ -36,7 +37,6 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
-	github.com/creativeyann17/go-delta v1.4.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.5.2+incompatible // indirect
@@ -50,7 +50,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lufia/plan9stats v0.0.0-20250317134145-8bc96cf8fc35 // indirect
@@ -73,14 +72,11 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
-	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 // indirect
 	github.com/savsgio/gotils v0.0.0-20230208104028-c358bd845dee // indirect
 	github.com/shirou/gopsutil/v4 v4.26.2 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect

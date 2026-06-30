@@ -63,6 +63,18 @@ func (c *Client) Stop() {
 	c.mu.Unlock()
 }
 
+// wsAuthGrace is how long a connection must stay open after the auth
+// frame is sent before we treat it as a real, working session rather
+// than an immediate auth rejection. The server closes the socket within
+// milliseconds of a bad/expired/revoked token (see authenticateWS) — so
+// a connection that dies sooner than this almost certainly means the
+// token is bad, not a network blip, and backoff should grow instead of
+// resetting. Without this, a stale token (token version bumped, JWT
+// expired) makes the loop hammer /ws roughly as fast as TCP handshakes
+// allow, since dialing the open /ws endpoint always succeeds even
+// though the auth frame gets rejected right after.
+const wsAuthGrace = 3 * time.Second
+
 func (c *Client) loop(ctx context.Context, wsURL, token string) {
 	backoff := 500 * time.Millisecond
 	// InsecureSkipVerify mirrors the apiclient — dev uses self-signed or
@@ -74,29 +86,44 @@ func (c *Client) loop(ctx context.Context, wsURL, token string) {
 		if ctx.Err() != nil {
 			return
 		}
+		survived := false
 		conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: httpc})
 		if err != nil {
 			c.log("ws dial: " + err.Error())
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
+		} else {
+			// First-message auth: the server validates this before pushing
+			// anything. If the write fails the read loop below will error
+			// out immediately and we reconnect.
+			if authMsg, mErr := json.Marshal(map[string]string{"type": "auth", "token": token}); mErr == nil {
+				_ = conn.Write(ctx, websocket.MessageText, authMsg)
 			}
-			if backoff < 10*time.Second {
-				backoff *= 2
-			}
-			continue
+			connectedAt := time.Now()
+			c.read(ctx, conn)
+			conn.Close(websocket.StatusNormalClosure, "")
+			survived = time.Since(connectedAt) >= wsAuthGrace
 		}
-		// First-message auth: the server validates this before pushing
-		// anything. If the write fails the read loop below will error out
-		// immediately and we reconnect.
-		if authMsg, mErr := json.Marshal(map[string]string{"type": "auth", "token": token}); mErr == nil {
-			_ = conn.Write(ctx, websocket.MessageText, authMsg)
+		if ctx.Err() != nil {
+			return
 		}
-		backoff = 500 * time.Millisecond
-		c.read(ctx, conn)
-		conn.Close(websocket.StatusNormalClosure, "")
+		backoff = nextBackoff(backoff, survived)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 	}
+}
+
+// nextBackoff computes the delay before the next reconnect attempt.
+// survived=true (the previous connection lasted past wsAuthGrace) resets
+// to the minimum so a real disconnect reconnects fast; survived=false
+// (died almost immediately — an auth rejection) doubles it, capped at
+// 10s, so a stale token can't spin the loop.
+func nextBackoff(current time.Duration, survived bool) time.Duration {
+	if survived {
+		return 500 * time.Millisecond
+	}
+	return min(current*2, 10*time.Second)
 }
 
 func (c *Client) read(ctx context.Context, conn *websocket.Conn) {

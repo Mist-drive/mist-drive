@@ -17,7 +17,16 @@ export default function App() {
   const [checked, setChecked] = useState(false)
   const [features, setFeatures] = useState<apiclient.Features>(new apiclient.Features())
 
-  useEffect(() => onSessionExpired(() => setUser(null)), [])
+  useEffect(() => onSessionExpired(() => {
+    setUser(null)
+    // Session expiry only resets frontend state by default — but the Go
+    // backend's ws client keeps reconnecting with the now-stale token
+    // (nothing else stops it) unless we also call the real Logout, which
+    // clears settings and calls ws.Stop()/engine.Stop(). Without this the
+    // app spins hammering /ws in the background while showing the login
+    // screen. Fire-and-forget: the UI already reflects logged-out state.
+    Logout().catch(() => {})
+  }), [])
 
   useEffect(() => {
     startLoading()

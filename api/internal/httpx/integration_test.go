@@ -301,6 +301,30 @@ func TestIntegration_QuotaExceededOnInit(t *testing.T) {
 	}
 }
 
+func TestIntegration_UploadInitRejectsAbusivePartSize(t *testing.T) {
+	// A tiny partSize on a modest-sized upload would otherwise make
+	// InitMultipart loop millions of times presigning part URLs
+	// synchronously inside the request — a DoS. Both guards (min part
+	// size, max part count) must reject before that loop ever runs.
+	f := newFixture(t, 50<<20) // 50 MiB quota
+
+	resp := f.do(t, "POST", "/api/files/upload/init", map[string]any{
+		"key": "tiny-parts.bin", "size": 10 << 20, "partSize": 1,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("partSize=1: want 400, got %d body=%s", resp.StatusCode, b)
+	}
+
+	resp2 := f.do(t, "POST", "/api/files/upload/init", map[string]any{
+		"key": "small-parts.bin", "size": 2 << 20, "partSize": 1 << 20, // 1 MiB parts, under the 5 MiB minimum
+	})
+	if resp2.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("partSize=1MiB on 2MiB upload: want 400, got %d body=%s", resp2.StatusCode, b)
+	}
+}
+
 func TestIntegration_ParallelReservationsRespectQuota(t *testing.T) {
 	// Two concurrent inits that each fit individually but not together.
 	// Exactly one should succeed; the second must be 413.
@@ -634,5 +658,186 @@ func TestIntegration_AbortReleasesReservation(t *testing.T) {
 	// Quota should now be free again.
 	if r := f.srv.Reservations.Get(f.user.ID); r != 0 {
 		t.Fatalf("reservation after abort=%d want 0", r)
+	}
+}
+
+// ---- rename ----
+
+// listResp mirrors listFiles' JSON shape, including the "processing" field
+// renameFile (and other async ops) populate while a path is in flight.
+type listResp struct {
+	Objects []struct {
+		Key string `json:"key"`
+	} `json:"objects"`
+	Processing []string `json:"processing"`
+}
+
+func (f *fixture) listFiles(t *testing.T, prefix string) listResp {
+	t.Helper()
+	resp := f.do(t, "GET", "/api/files/?prefix="+prefix, nil)
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list: status=%d body=%s", resp.StatusCode, b)
+	}
+	var lr listResp
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		t.Fatal(err)
+	}
+	return lr
+}
+
+func (f *fixture) hasKey(t *testing.T, prefix, key string) bool {
+	t.Helper()
+	for _, o := range f.listFiles(t, prefix).Objects {
+		if o.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForRenameDone polls until the given path is no longer marked as
+// processing — renameFile runs the actual copy+delete in a background
+// goroutine and returns 202 immediately.
+func (f *fixture) waitForRenameDone(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		lr := f.listFiles(t, "")
+		blocked := false
+		for _, p := range lr.Processing {
+			if p == path {
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("rename of %q did not finish within deadline", path)
+}
+
+func TestIntegration_RenameFile(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	ctx := context.Background()
+	if err := f.s3c.PutObject(ctx, f.user.Bucket(), "old.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "old.txt", "newName": "new.txt"})
+	if resp.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("rename: status=%d body=%s", resp.StatusCode, b)
+	}
+	f.waitForRenameDone(t, "old.txt")
+
+	if f.hasKey(t, "", "old.txt") {
+		t.Fatal("old.txt should no longer exist after rename")
+	}
+	if !f.hasKey(t, "", "new.txt") {
+		t.Fatal("new.txt should exist after rename")
+	}
+}
+
+func TestIntegration_RenameFolder(t *testing.T) {
+	// Folder rename fans out CopyObject calls across a worker pool
+	// (copyFolderObjects) instead of one call at a time — use enough
+	// objects that a regression back to fully-sequential would still
+	// pass, but a broken worker pool (e.g. dropped objects, races on
+	// the shared result slice) would not.
+	f := newFixture(t, 50<<20)
+	ctx := context.Background()
+	const n = 12
+	for i := range n {
+		key := fmt.Sprintf("docs/file-%02d.txt", i)
+		if err := f.s3c.PutObject(ctx, f.user.Bucket(), key, bytes.NewReader([]byte("x")), 1, "text/plain", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "docs", "newName": "archive"})
+	if resp.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("rename: status=%d body=%s", resp.StatusCode, b)
+	}
+	f.waitForRenameDone(t, "docs")
+
+	lr := f.listFiles(t, "")
+	var oldCount, newCount int
+	for _, o := range lr.Objects {
+		switch {
+		case bytes.HasPrefix([]byte(o.Key), []byte("docs/")):
+			oldCount++
+		case bytes.HasPrefix([]byte(o.Key), []byte("archive/")):
+			newCount++
+		}
+	}
+	if oldCount != 0 {
+		t.Fatalf("expected no objects left under docs/, found %d", oldCount)
+	}
+	if newCount != n {
+		t.Fatalf("expected %d objects under archive/, found %d", n, newCount)
+	}
+}
+
+func TestIntegration_RenameBlockedWhileProcessing(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	ctx := context.Background()
+	if err := f.s3c.PutObject(ctx, f.user.Bucket(), "busy.txt", bytes.NewReader([]byte("x")), 1, "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark the path as already being processed (mirrors what renameFile
+	// itself does right before kicking off its background goroutine) and
+	// confirm a second rename request on the same path is rejected
+	// instead of racing the first.
+	f.srv.AddProcessing(f.user.ID, "busy.txt")
+	defer f.srv.RemoveProcessing(f.user.ID, "busy.txt")
+
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "busy.txt", "newName": "renamed.txt"})
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 409 while processing, got %d body=%s", resp.StatusCode, b)
+	}
+}
+
+func TestIntegration_RenameCollision(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	ctx := context.Background()
+	if err := f.s3c.PutObject(ctx, f.user.Bucket(), "a.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s3c.PutObject(ctx, f.user.Bucket(), "b.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "a.txt", "newName": "b.txt"})
+	if resp.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 409 on name collision, got %d body=%s", resp.StatusCode, b)
+	}
+	// Neither file should have moved.
+	if !f.hasKey(t, "", "a.txt") || !f.hasKey(t, "", "b.txt") {
+		t.Fatal("collision rejection must leave both files untouched")
+	}
+}
+
+func TestIntegration_RenameSourceNotFound(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "ghost.txt", "newName": "renamed.txt"})
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 404 for missing source, got %d body=%s", resp.StatusCode, b)
+	}
+}
+
+func TestIntegration_RenamePathTraversalRejected(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	resp := f.do(t, "POST", "/api/files/rename", map[string]any{"path": "../etc/passwd", "newName": "renamed.txt"})
+	if resp.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 400 for path traversal, got %d body=%s", resp.StatusCode, b)
 	}
 }

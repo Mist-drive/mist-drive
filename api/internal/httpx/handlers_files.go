@@ -7,6 +7,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -15,6 +16,60 @@ import (
 	"github.com/yann/mist-drive/api/internal/s3x"
 	"github.com/yann/mist-drive/api/internal/users"
 )
+
+// renameCopyWorkers bounds how many CopyObject calls a folder rename runs
+// concurrently against MinIO — fan-out without unbounded goroutines on
+// folders with thousands of objects.
+const renameCopyWorkers = 8
+
+// copyFolderObjects copies every object in folderObjs from under oldPath
+// to the equivalent path under newPath, fanning out across a bounded
+// worker pool instead of one MinIO round-trip at a time. Returns the
+// source keys that were copied successfully (safe to remove) and the
+// first error encountered, if any; on error, copying still runs to
+// completion for the remaining objects rather than aborting the batch
+// (these are independent S3 calls, so there's nothing to roll back, and
+// stopping early would leave the worker pool's already-in-flight calls
+// to finish anyway).
+func copyFolderObjects(ctx context.Context, s3c *s3x.Client, bucket, oldPath, newPath string, folderObjs []s3x.ObjectInfo) ([]string, error) {
+	workers := min(renameCopyWorkers, len(folderObjs))
+
+	work := make(chan s3x.ObjectInfo)
+	go func() {
+		defer close(work)
+		for _, o := range folderObjs {
+			work <- o
+		}
+	}()
+
+	var mu sync.Mutex
+	var oldKeys []string
+	var firstErr error
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for o := range work {
+				dstKey := newPath + "/" + strings.TrimPrefix(o.Key, oldPath+"/")
+				err := s3c.CopyObject(ctx, bucket, o.Key, dstKey)
+				mu.Lock()
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+				} else {
+					oldKeys = append(oldKeys, o.Key)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	return oldKeys, firstErr
+}
 
 // sumObjectSizes totals the byte size of an object listing.
 func sumObjectSizes(objs []s3x.ObjectInfo) int64 {
@@ -26,18 +81,22 @@ func sumObjectSizes(objs []s3x.ObjectInfo) int64 {
 }
 
 // recountUsedBytes re-derives a user's usedBytes from an authoritative
-// full bucket listing and persists it. Cheap, and keeps the counter
-// honest across crashes / stray parts / partial deletes.
-func (s *Server) recountUsedBytes(ctx context.Context, uid, bucket string) (int64, error) {
+// full bucket listing and persists it. Keeps the counter honest across
+// crashes / stray parts / partial deletes — but it's a full listing, so
+// callers that already know the size delta of what changed (uploads
+// completing, single-file/prefix deletes) should apply that delta via
+// AddUsedBytes instead of paying for this. Reserved for recomputeUsage,
+// which exists precisely to fix drift.
+func (s *Server) recountUsedBytes(ctx context.Context, uid, bucket string) (total int64, count int, err error) {
 	objs, err := s.S3.ListObjects(ctx, bucket, "")
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	total := sumObjectSizes(objs)
+	total = sumObjectSizes(objs)
 	if err := s.Users.SetUsedBytes(uid, total); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return total, nil
+	return total, len(objs), nil
 }
 
 func (s *Server) listFiles(c *fiber.Ctx) error {
@@ -48,7 +107,7 @@ func (s *Server) listFiles(c *fiber.Ctx) error {
 	prefix := c.Query("prefix", "")
 	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), prefix)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: list objects", err)
 	}
 	return c.JSON(fiber.Map{
 		"objects":    objs,
@@ -67,13 +126,16 @@ func (s *Server) mkdir(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil || strings.TrimSpace(body.Path) == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "missing path")
 	}
+	if hasDotDotSegment(body.Path) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid path")
+	}
 	key := strings.Trim(body.Path, "/") + "/.keep"
 	prefix := strings.Trim(body.Path, "/")
 	if s.isProcessingBlocked(u.ID, prefix) {
 		return fiber.NewError(fiber.StatusConflict, "destination is currently being processed")
 	}
 	if err := s.S3.PutEmptyObject(c.Context(), u.Bucket(), key); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: mkdir", err)
 	}
 	s.publishChange(u.ID)
 	return c.JSON(fiber.Map{"ok": true})
@@ -88,6 +150,9 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 	prefix := c.Query("prefix")
 	if key == "" && prefix == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "missing key or prefix")
+	}
+	if hasDotDotSegment(key) || hasDotDotSegment(prefix) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid key or prefix")
 	}
 
 	if key != "" && s.isProcessingBlocked(u.ID, key) {
@@ -105,7 +170,7 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 		// request instead of N — and reconcile used bytes afterwards.
 		objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), prefix)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("files: delete list objects", err)
 		}
 		keys := make([]string, 0, len(objs))
 		for _, o := range objs {
@@ -114,7 +179,7 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 			count++
 		}
 		if err := s.S3.RemoveObjects(c.Context(), u.Bucket(), keys); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("files: delete remove objects", err)
 		}
 	} else {
 		size, err := s.S3.StatObject(c.Context(), u.Bucket(), key)
@@ -122,17 +187,18 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusNotFound, "not found")
 		}
 		if err := s.S3.RemoveObject(c.Context(), u.Bucket(), key); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("files: delete remove object", err)
 		}
 		freed = size
 		count = 1
 	}
 
-	// Recompute usedBytes authoritatively from S3; fall back to a delta
-	// subtraction if the listing fails.
-	if _, lerr := s.recountUsedBytes(c.Context(), u.ID, u.Bucket()); lerr != nil {
-		_ = s.Users.AddUsedBytes(u.ID, -freed)
-	}
+	// freed is already exact — it came from the same StatObject/ListObjects
+	// call that drove the actual deletion above — so apply it as a delta
+	// instead of paying for a second full-bucket listing (recountUsedBytes)
+	// just to recompute the same number. recountUsedBytes stays reserved
+	// for recomputeUsage, which exists precisely to catch drift.
+	_ = s.Users.AddUsedBytes(u.ID, -freed)
 	s.publishChange(u.ID)
 	return c.JSON(fiber.Map{"ok": true, "count": count, "freed": freed})
 }
@@ -145,15 +211,11 @@ func (s *Server) recomputeUsage(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "no user")
 	}
-	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), "")
+	total, count, err := s.recountUsedBytes(c.Context(), u.ID, u.Bucket())
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: recompute usage", err)
 	}
-	total := sumObjectSizes(objs)
-	if err := s.Users.SetUsedBytes(u.ID, total); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-	}
-	return c.JSON(fiber.Map{"ok": true, "usedBytes": total, "count": len(objs)})
+	return c.JSON(fiber.Map{"ok": true, "usedBytes": total, "count": count})
 }
 
 func (s *Server) download(c *fiber.Ctx) error {
@@ -165,9 +227,12 @@ func (s *Server) download(c *fiber.Ctx) error {
 	if key == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "missing key")
 	}
+	if hasDotDotSegment(key) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid key")
+	}
 	url, err := s.S3.PresignGet(c.Context(), u.Bucket(), key, s.Cfg.PresignDownload)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: presign download", err)
 	}
 	return c.JSON(fiber.Map{"url": url})
 }
@@ -197,7 +262,7 @@ func (s *Server) downloadZipTicket(c *fiber.Ctx) error {
 	_ = c.BodyParser(&body)
 	ticket, err := s.dlGuard().issue(u.ID, body.Prefix)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: issue download ticket", err)
 	}
 	return c.JSON(fiber.Map{"ticket": ticket})
 }
@@ -223,7 +288,7 @@ func (s *Server) downloadZipByTicket(c *fiber.Ctx) error {
 func (s *Server) streamZip(c *fiber.Ctx, u *users.User, prefix string) error {
 	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), prefix)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return s.serverError("files: zip list objects", err)
 	}
 	if len(objs) == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "no objects under prefix")
@@ -305,6 +370,9 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 	if strings.Contains(newName, "/") {
 		return fiber.NewError(fiber.StatusBadRequest, "newName must not contain slashes")
 	}
+	if hasDotDotSegment(oldPath) || hasDotDotSegment(newName) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid path or newName")
+	}
 
 	// New path = same parent directory + new name
 	parent := ""
@@ -385,15 +453,13 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 				renameErr = s.S3.RemoveObject(ctx, bucket, oldPath)
 			}
 		} else {
-			oldKeys := make([]string, 0, len(folderObjs))
-			for _, o := range folderObjs {
-				dstKey := newPath + "/" + strings.TrimPrefix(o.Key, oldPath+"/")
-				if err := s.S3.CopyObject(ctx, bucket, o.Key, dstKey); err != nil {
-					renameErr = err
-					break
-				}
-				oldKeys = append(oldKeys, o.Key)
-			}
+			oldKeys, copyErr := copyFolderObjects(ctx, s.S3, bucket, oldPath, newPath, folderObjs)
+			renameErr = copyErr
+			// Match the previous sequential behavior: only remove the old
+			// objects once every copy in the folder succeeded. A partial
+			// failure leaves the source folder untouched (some objects now
+			// duplicated at the destination) rather than silently deleting
+			// originals whose copy never happened or errored.
 			if renameErr == nil {
 				renameErr = s.S3.RemoveObjects(ctx, bucket, oldKeys)
 			}

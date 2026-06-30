@@ -58,6 +58,9 @@ func (s *Server) previewFile(c *fiber.Ctx) error {
 	if key == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "missing key")
 	}
+	if hasDotDotSegment(key) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid key")
+	}
 
 	ptype := filePreviewType(key)
 
@@ -93,7 +96,7 @@ func (s *Server) previewFile(c *fiber.Ctx) error {
 		}
 		rc, err := s.S3.GetObject(c.Context(), u.Bucket(), key)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("preview: get object", err)
 		}
 		defer rc.Close()
 		img, _, err := image.Decode(rc)
@@ -104,7 +107,7 @@ func (s *Server) previewFile(c *fiber.Ctx) error {
 		thumb := thumbnailImage(img, previewMaxDim)
 		var buf bytes.Buffer
 		if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 72}); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("preview: encode thumbnail", err)
 		}
 		c.Set(fiber.HeaderContentType, "image/jpeg")
 		return c.Send(buf.Bytes())
@@ -112,7 +115,7 @@ func (s *Server) previewFile(c *fiber.Ctx) error {
 	case "text":
 		rc, err := s.S3.GetObjectRange(c.Context(), u.Bucket(), key, 0, int64(previewTextMax)-1)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return s.serverError("preview: get object range", err)
 		}
 		defer rc.Close()
 		raw, _ := io.ReadAll(rc)
