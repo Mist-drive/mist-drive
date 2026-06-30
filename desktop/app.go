@@ -30,6 +30,13 @@ type App struct {
 	// frontend can show the release tag in the header. Defaults to
 	// "dev" for local `wails dev` runs.
 	version string
+	// githubURL is injected from main the same way as version — a
+	// build-time default, not a runtime env var, since desktop apps
+	// aren't usually launched from a shell with env vars set. Lets a
+	// fork point the "visit website" link at their own repo with a
+	// `-ldflags "-X main.githubURL=..."` override instead of editing
+	// source.
+	githubURL string
 	// features holds the capability flags returned by the connected server's
 	// /health endpoint. Refreshed after every successful login or Me() check.
 	features apiclient.Features
@@ -52,7 +59,7 @@ type App struct {
 	fileCtxs   map[string]context.CancelFunc
 }
 
-func NewApp(ver string) *App {
+func NewApp(ver, githubURL string) *App {
 	st, err := settings.Open()
 	if err != nil {
 		// Settings dir unwritable is fatal — there's no meaningful
@@ -66,8 +73,9 @@ func NewApp(ver string) *App {
 		api.SetDeviceCookie(s.TrustedDeviceCookie)
 	}
 	a := &App{
-		version: ver,
-		settings: st,
+		version:   ver,
+		githubURL: githubURL,
+		settings:  st,
 		// InsecureTLS=true: plan originally required HTTPS, but to
 		// develop against http://localhost:3000 we accept both.
 		api: api,
@@ -811,6 +819,15 @@ func (a *App) OpenWebApp() {
 		url += "#token=" + s.JWT
 	}
 	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+// OpenGitHub opens the project's repo (githubURL, injected from main —
+// see its doc comment) in the system browser. A plain <a href> inside
+// the Wails webview would try to navigate the app's own window instead
+// of launching an external browser, so this goes through the same
+// runtime.BrowserOpenURL path as OpenWebApp.
+func (a *App) OpenGitHub() {
+	runtime.BrowserOpenURL(a.ctx, a.githubURL)
 }
 
 // DownloadFile asks the user where to save the given key, then streams

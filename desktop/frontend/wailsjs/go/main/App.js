@@ -66,6 +66,10 @@ export function Me() {
   return window['go']['main']['App']['Me']();
 }
 
+export function OpenGitHub() {
+  return window['go']['main']['App']['OpenGitHub']();
+}
+
 export function OpenWebApp() {
   return window['go']['main']['App']['OpenWebApp']();
 }

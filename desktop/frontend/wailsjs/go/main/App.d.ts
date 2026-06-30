@@ -37,6 +37,8 @@ export function Logout():Promise<void>;
 
 export function Me():Promise<apiclient.PublicUser>;
 
+export function OpenGitHub():Promise<void>;
+
 export function OpenWebApp():Promise<void>;
 
 export function PickFile(arg1:string):Promise<main.LocalFile>;

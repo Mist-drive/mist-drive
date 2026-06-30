@@ -6,6 +6,7 @@ type Props = {
   version?: string
   serverSlot?: ReactNode
   totpSlot?: ReactNode
+  footerSlot?: ReactNode
   submitLabel?: string
   login: string
   onLoginChange: (v: string) => void
@@ -23,6 +24,7 @@ export default function LoginCard({
   version,
   serverSlot,
   totpSlot,
+  footerSlot,
   submitLabel,
   login,
   onLoginChange,
@@ -66,6 +68,7 @@ export default function LoginCard({
         <button type="submit" disabled={busy || submitDisabled} style={{ marginTop: '1.4rem', width: '100%' }}>
           {submitLabel ?? (busy ? t('login.signingIn') : t('login.signIn'))}
         </button>
+        {footerSlot}
       </form>
     </div>
   )

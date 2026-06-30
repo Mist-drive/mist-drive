@@ -20,6 +20,14 @@ import (
 // something sensible in the header instead of an empty string.
 var version = "dev"
 
+// githubURL is overridden the same way, e.g.
+//
+//	go build -ldflags "-X main.githubURL=https://github.com/you/your-fork" ...
+//
+// so a fork can point the login screen's "visit website" link at its
+// own repo without touching source. Defaults to the upstream repo.
+var githubURL = "https://github.com/Mist-drive/mist-drive"
+
 //go:embed all:frontend/dist
 var assets embed.FS
 
@@ -46,7 +54,7 @@ func trayIcon() []byte {
 }
 
 func main() {
-	app := NewApp(version)
+	app := NewApp(version, githubURL)
 
 	// Register the app with the OS launcher every time we start (but
 	// skip `wails dev` — its binary name contains "-dev-" and gets

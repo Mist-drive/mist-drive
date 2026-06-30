@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { GetSettings, GetVersion, ListEnvironments, Login } from '../../wailsjs/go/main/App'
+import { GetSettings, GetVersion, ListEnvironments, Login, OpenGitHub } from '../../wailsjs/go/main/App'
 import { apiclient } from '../../wailsjs/go/models'
 import LoginCard from '@shared/components/LoginCard'
 import { useTranslation } from '@shared/lib/i18n'
@@ -136,6 +136,12 @@ export default function LoginScreen({ onLogin }: Props) {
           </label>
         </div>
       ) : undefined}
+      footerSlot={
+        <button type="button" className="back-link" style={{ display: 'block', margin: '1rem auto 0', textAlign: 'center' }}
+          onClick={() => OpenGitHub()}>
+          {t('desktop.visitWebsite')}
+        </button>
+      }
     />
   )
 }
