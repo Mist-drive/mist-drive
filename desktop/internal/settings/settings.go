@@ -34,13 +34,13 @@ type SyncFolder struct {
 
 // EnvSettings holds config that is specific to a single API endpoint.
 type EnvSettings struct {
-	JWT                 string       `json:"jwt"`
-	Login               string       `json:"login"`
-	RememberLogin       bool         `json:"rememberLogin"`
-	TrustedDeviceCookie string       `json:"trustedDeviceCookie,omitempty"`
-	Folders             []SyncFolder `json:"folders"`
-	MaxConcurrentUploads int         `json:"maxConcurrentUploads"`
-	MaxUploadRateKBps    int         `json:"maxUploadRateKBps"`
+	JWT                  string       `json:"jwt"`
+	Login                string       `json:"login"`
+	RememberLogin        bool         `json:"rememberLogin"`
+	TrustedDeviceCookie  string       `json:"trustedDeviceCookie,omitempty"`
+	Folders              []SyncFolder `json:"folders"`
+	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
+	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
 }
 
 func envDefaults() EnvSettings {

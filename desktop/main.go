@@ -92,6 +92,15 @@ func main() {
 		// of exiting. The tray's Quit menu sets forceQuit first, which
 		// lets the next close through.
 		OnBeforeClose: app.beforeClose,
+		// Launching while an instance sits in the tray must not spawn
+		// a second process (double tray icon, competing sync engines):
+		// the new launch pops the existing window instead, then exits.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "com.creativeyann17.mist-drive",
+			OnSecondInstanceLaunch: func(options.SecondInstanceData) {
+				app.ShowWindow()
+			},
+		},
 		Bind: []any{
 			app,
 		},

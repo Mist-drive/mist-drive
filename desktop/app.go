@@ -53,10 +53,10 @@ type App struct {
 	pickedFolderPath   string
 	pickedFolderPrefix string
 	// batchMu guards batchCancel. fileCtxMu guards fileCtxs.
-	batchMu    sync.Mutex
+	batchMu     sync.Mutex
 	batchCancel context.CancelFunc
-	fileCtxMu  sync.Mutex
-	fileCtxs   map[string]context.CancelFunc
+	fileCtxMu   sync.Mutex
+	fileCtxs    map[string]context.CancelFunc
 }
 
 func NewApp(ver, githubURL string) *App {

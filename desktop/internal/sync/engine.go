@@ -67,10 +67,10 @@ type Status struct {
 
 // LogEntry is a single sync activity record shown in the history modal.
 type LogEntry struct {
-	Time    time.Time `json:"time"`
-	Action  string    `json:"action"` // "upload", "download", "delete", "error"
-	File    string    `json:"file"`
-	Error   string    `json:"error,omitempty"`
+	Time   time.Time `json:"time"`
+	Action string    `json:"action"` // "upload", "download", "delete", "error"
+	File   string    `json:"file"`
+	Error  string    `json:"error,omitempty"`
 }
 
 const maxLogEntries = 200
@@ -539,8 +539,8 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 			continue
 		}
 		if err := e.download(f, rel); err != nil {
-				e.recordErr(err)
-			}
+			e.recordErr(err)
+		}
 	}
 }
 
