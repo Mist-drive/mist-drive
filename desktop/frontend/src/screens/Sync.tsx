@@ -3,6 +3,7 @@ import { useTranslation } from '@shared/lib/i18n'
 import {
   AddSyncFolder,
   GetSettings,
+  Me,
   RemoveSyncFolder,
   SaveSettings,
   SetBandwidthLimits,
@@ -11,6 +12,7 @@ import {
   SyncStatus,
 } from '../../wailsjs/go/main/App'
 import { settings, sync } from '../../wailsjs/go/models'
+import { isNetworkError, notifyServerLost } from '../session'
 
 // Sync control panel: lists folder mappings, lets the user add/remove
 // them, starts/stops the engine, tweaks bandwidth. Status is polled
@@ -36,6 +38,16 @@ export default function SyncPanel() {
     const t = setInterval(refreshStatus, 1000)
     return () => clearInterval(t)
   }, [])
+
+  // The sync engine is usually the first to notice a dead server (its
+  // errors land in status.lastError). Double-check with a real API call
+  // before flipping to the login screen — a stale lastError from a
+  // recovered blip must not log the user out.
+  useEffect(() => {
+    if (status?.lastError && isNetworkError(status.lastError)) {
+      Me().catch((e) => { if (isNetworkError(e)) notifyServerLost() })
+    }
+  }, [status?.lastError])
 
   const openHistory = async () => {
     setHistory(await SyncHistory())

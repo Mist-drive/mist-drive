@@ -7,9 +7,12 @@ import { startLoading, endLoading } from '@shared/lib/loading'
 
 type Props = {
   onLogin: (user: apiclient.PublicUser) => void
+  // One-shot reason for landing here (e.g. "connection lost"), shown
+  // in the card's error slot until the user acts.
+  notice?: string | null
 }
 
-export default function LoginScreen({ onLogin }: Props) {
+export default function LoginScreen({ onLogin, notice }: Props) {
   const { t } = useTranslation()
   const [apiURL, setApiURL] = useState('http://localhost:3000')
   const [envs, setEnvs] = useState<string[]>([])
@@ -20,7 +23,7 @@ export default function LoginScreen({ onLogin }: Props) {
   const [totpRequired, setTotpRequired] = useState(false)
   const [totpCode, setTotpCode] = useState('')
   const [rememberDevice, setRememberDevice] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(notice ?? null)
   const [busy, setBusy] = useState(false)
   const [version, setVersion] = useState('')
 

@@ -90,7 +90,8 @@
     "totpCode": "Authenticator code",
     "totpCodePlaceholder": "6-digit code",
     "verifying": "Verifying…",
-    "rememberTotpDevice": "Don't ask again on this device for 30 days"
+    "rememberTotpDevice": "Don't ask again on this device for 30 days",
+    "serverLost": "Connection with the server lost — please sign in again."
   },
   "settings": {
     "title": "Settings",

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, setSession, isRemembered, getSavedLogin } from '../lib/api'
+import { api, setSession, isRemembered, getSavedLogin, NETWORK_ERROR } from '../lib/api'
 import LoginCard from '@shared/components/LoginCard'
 import { useTranslation } from '@shared/lib/i18n'
 
@@ -15,7 +15,15 @@ export default function Login({ version }: Props) {
   const [totpRequired, setTotpRequired] = useState(false)
   const [totpCode, setTotpCode] = useState('')
   const [rememberDevice, setRememberDevice] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
+  // A "connection lost" redirect (api.ts serverLost) leaves a one-shot
+  // notice so the user knows WHY they landed back on the login page.
+  const [err, setErr] = useState<string | null>(() => {
+    if (sessionStorage.getItem('mist.notice') === 'serverLost') {
+      sessionStorage.removeItem('mist.notice')
+      return t('login.serverLost')
+    }
+    return null
+  })
   const [busy, setBusy] = useState(false)
 
   const submit = async (e: React.FormEvent) => {
@@ -31,7 +39,7 @@ export default function Login({ version }: Props) {
       setSession(res.token, res.user, remember)
       nav('/files')
     } catch (e: any) {
-      setErr(e.message || 'login failed')
+      setErr(e.message === NETWORK_ERROR ? t('login.serverLost') : e.message || 'login failed')
     } finally {
       setBusy(false)
     }

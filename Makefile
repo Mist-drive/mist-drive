@@ -32,6 +32,10 @@ dev-api: install-data ## run api with air hot-reload (starts minio via docker co
 	@grep -q "^SMTP_FROM=" api/.env || echo "SMTP_FROM=noreply@mist-drive.local" >> api/.env
 	@grep -q "^PUBLIC_URL=" api/.env || echo "PUBLIC_URL=http://localhost:3000" >> api/.env
 	docker compose up -d --wait minio mailpit
+	@# Reap any orphaned hot-reload child from a previous session: when
+	@# air dies hard, its compiled api/tmp/api keeps port 3000 forever
+	@# (found one 5 days old). pkill matches the binary path, not "air".
+	@pkill -f "[a]pi/tmp/api" 2>/dev/null && sleep 1 || true
 	cd api && set -a && . ./.env && set +a && air || go run ./cmd/server
 
 dev-ui: ## run web vite dev server

@@ -29,7 +29,7 @@ import UploadCard from '@shared/components/UploadCard'
 import { type UploadEntry } from '@shared/lib/upload'
 import { apiclient } from '../../wailsjs/go/models'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
-import { is401, notifySessionExpired } from '../session'
+import { is401, isNetworkError, notifySessionExpired, notifyServerLost } from '../session'
 
 
 type Props = { onQuotaChange?: () => void; user: apiclient.PublicUser }
@@ -71,6 +71,7 @@ export default function Files({ onQuotaChange, user }: Props) {
     }
     catch (e: any) {
       if (is401(e)) { notifySessionExpired(); return }
+      if (isNetworkError(e)) { notifyServerLost(); return }
       setErr(String(e?.message ?? e))
     }
     finally { endLoading() }
@@ -116,6 +117,7 @@ export default function Files({ onQuotaChange, user }: Props) {
     try { return await fn() }
     catch (e: any) {
       if (is401(e)) { notifySessionExpired(); return null }
+      if (isNetworkError(e)) { notifyServerLost(); return null }
       setErr(String(e?.message ?? e)); return null
     }
     finally { setBusy(null); endLoading() }

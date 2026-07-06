@@ -94,6 +94,11 @@ export function onEvent(l: (e: EventMsg) => void): () => void {
 
 let _ws: WebSocket | null = null
 let _wsBackoff = 500
+// Consecutive failed connects. An idle tab makes no fetches, so a dead
+// server would otherwise go unnoticed until the next click — after a
+// few failed WS reconnects we probe /health and route to login if the
+// server is truly gone (vs. just a websocket hiccup).
+let _wsFails = 0
 function ensureWS() {
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return
   const tok = getToken()
@@ -106,6 +111,7 @@ function ensureWS() {
   _ws = ws
   ws.onopen = () => {
     _wsBackoff = 500
+    _wsFails = 0
     ws.send(JSON.stringify({ type: 'auth', token: tok }))
   }
   ws.onmessage = (ev) => {
@@ -116,6 +122,13 @@ function ensureWS() {
   }
   ws.onclose = () => {
     _ws = null
+    _wsFails++
+    if (_wsFails >= 3 && getToken()) {
+      // r.ok matters: through a proxy a dead backend still "answers".
+      fetch('/health')
+        .then((r) => { if (r.ok) { _wsFails = 0 } else { serverLost() } })
+        .catch(() => serverLost())
+    }
     // Reconnect with capped exponential backoff. Skip while the tab
     // is hidden — we'll retry on visibilitychange.
     if (document.visibilityState === 'hidden') return
@@ -128,6 +141,34 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') ensureWS()
 })
 
+// serverLost routes the user back to the login page with a friendly
+// "connection lost" notice instead of leaving screens stuck on raw
+// fetch errors. The notice survives the redirect via sessionStorage;
+// Login reads and clears it. No-op while already on /login so a failed
+// login POST shows its own error instead of looping.
+export const NETWORK_ERROR = 'NETWORK'
+function serverLost() {
+  if (window.location.pathname === '/login') return
+  sessionStorage.setItem('mist.notice', 'serverLost')
+  clearSession()
+  window.location.replace('/login')
+}
+
+// A dead backend behind a proxy does NOT reject fetch — Vite's dev
+// proxy answers 500 and Traefik answers 502/503. So any 5xx is only a
+// SUSPICION of a dead server; /health is the discriminator (a live
+// server always answers it, a single buggy endpoint doesn't take it
+// down). Probe once, redirect only when /health is dead too.
+let _probing = false
+function maybeServerLost() {
+  if (_probing) return
+  _probing = true
+  fetch('/health')
+    .then((r) => { if (!r.ok) serverLost() })
+    .catch(() => serverLost())
+    .finally(() => { _probing = false })
+}
+
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
@@ -136,11 +177,21 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (tok) headers.set('Authorization', `Bearer ${tok}`)
   startLoading()
   try {
-    const res = await fetch(path, { ...init, headers })
+    let res: Response
+    try {
+      res = await fetch(path, { ...init, headers })
+    } catch {
+      // fetch rejects only when even the proxy/edge is unreachable.
+      serverLost()
+      throw new Error(NETWORK_ERROR)
+    }
     if (!res.ok) {
       if (res.status === 401) {
         clearSession()
         window.location.replace('/login')
+      }
+      if ([500, 502, 503, 504].includes(res.status)) {
+        maybeServerLost() // async probe; redirects only if /health is dead
       }
       const text = await res.text()
       throw new Error(`${res.status}: ${text || res.statusText}`)

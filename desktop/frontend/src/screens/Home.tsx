@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { GetVersion, Me, OpenWebApp } from '../../wailsjs/go/main/App'
-import { is401, notifySessionExpired } from '../session'
+import { is401, isNetworkError, notifySessionExpired, notifyServerLost } from '../session'
 import { apiclient } from '../../wailsjs/go/models'
 import Logo from '@shared/components/Logo'
 import Files from './Files'
@@ -26,7 +26,10 @@ export default function Home({ user: initial, features, onLogout }: Props) {
   }, [])
 
   const refreshQuota = async () => {
-    try { setUser(await Me()) } catch (e) { if (is401(e)) notifySessionExpired() }
+    try { setUser(await Me()) } catch (e) {
+      if (is401(e)) notifySessionExpired()
+      else if (isNetworkError(e)) notifyServerLost()
+    }
   }
 
   const tabStyle = (t: Tab): React.CSSProperties => ({
