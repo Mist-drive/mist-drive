@@ -44,13 +44,13 @@ type Server struct {
 	Features      features.Features
 	Mailer        *notify.Mailer
 	CompressQueue *compress.Queue
-	throttle     *loginThrottle
-	throttleOnce sync.Once
-	dlTickets    *downloadTickets
-	dlOnce       sync.Once
-	bootTime     time.Time // tokens issued before this are rejected (set in Register)
-	procMu       sync.RWMutex
-	processing   map[string]map[string]bool // userID → processing path prefixes
+	throttle      *loginThrottle
+	throttleOnce  sync.Once
+	dlTickets     *downloadTickets
+	dlOnce        sync.Once
+	bootTime      time.Time // tokens issued before this are rejected (set in Register)
+	procMu        sync.RWMutex
+	processing    map[string]map[string]bool // userID → processing path prefixes
 }
 
 // loginGuard lazily builds the login throttle. Lazy so a bare

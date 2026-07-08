@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/creativeyann17/go-docstore"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/yann/mist-drive/api/internal/auth"
@@ -21,10 +23,10 @@ import (
 const unitSecret = "test-secret-32bytesxxxxxxxxxx!!"
 
 type unitFixture struct {
-	app       *fiber.App
-	alice     *users.User
-	userToken string
-	adminID   string
+	app        *fiber.App
+	alice      *users.User
+	userToken  string
+	adminID    string
 	adminToken string
 }
 
@@ -39,11 +41,16 @@ func newUnitFixture(t *testing.T) *unitFixture {
 		DefaultQuota: 10 << 30,
 	}
 
-	uStore, err := users.NewStore(dataDir)
+	ds, err := docstore.Open(filepath.Join(dataDir, "mist.db"))
+	if err != nil {
+		t.Fatalf("docstore.Open: %v", err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	uStore, err := users.NewStore(ds, dataDir)
 	if err != nil {
 		t.Fatalf("users.NewStore: %v", err)
 	}
-	upStore, err := uploads.NewStore(dataDir)
+	upStore, err := uploads.NewStore(ds, dataDir)
 	if err != nil {
 		t.Fatalf("uploads.NewStore: %v", err)
 	}
@@ -225,13 +232,15 @@ func TestLogin_MissingFields(t *testing.T) {
 func TestLogin_VersionMismatch(t *testing.T) {
 	// Build a fresh app with a pinned server version so the version check fires.
 	dataDir := t.TempDir()
-	uStore, _ := users.NewStore(dataDir)
+	ds2, _ := docstore.Open(filepath.Join(dataDir, "mist.db"))
+	t.Cleanup(func() { ds2.Close() })
+	uStore, _ := users.NewStore(ds2, dataDir)
 	hash, _ := auth.HashPassword("pw")
 	_ = uStore.Create(&users.User{
 		ID: uuid.NewString(), Login: "bob", BcryptPwd: hash,
 		QuotaBytes: 10 << 30, Role: users.RoleUser, CreatedAt: time.Now(),
 	})
-	upStore, _ := uploads.NewStore(dataDir)
+	upStore, _ := uploads.NewStore(ds2, dataDir)
 	srv := &httpx.Server{
 		Cfg: &config.Config{
 			JWTSecret: unitSecret,

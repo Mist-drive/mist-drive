@@ -3,8 +3,8 @@ package httpx
 import (
 	"bytes"
 	"image"
-	"image/jpeg"
 	_ "image/gif"
+	"image/jpeg"
 	_ "image/png"
 	"io"
 	"net/http"

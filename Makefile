@@ -1,6 +1,6 @@
 VERSION ?= dev
 
-.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build run stop test test-unit test-integration clean
+.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build db-web run stop test test-unit test-integration clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -31,7 +31,7 @@ dev-api: install-data ## run api with air hot-reload (starts minio via docker co
 	@grep -q "^SMTP_TLS=" api/.env || echo "SMTP_TLS=none" >> api/.env
 	@grep -q "^SMTP_FROM=" api/.env || echo "SMTP_FROM=noreply@mist-drive.local" >> api/.env
 	@grep -q "^PUBLIC_URL=" api/.env || echo "PUBLIC_URL=http://localhost:3000" >> api/.env
-	docker compose up -d --wait minio mailpit
+	docker compose up -d --wait minio mailpit sqlite-web
 	@# Reap any orphaned hot-reload child from a previous session: when
 	@# air dies hard, its compiled api/tmp/api keeps port 3000 forever
 	@# (found one 5 days old). pkill matches the binary path, not "air".
@@ -43,6 +43,14 @@ dev-ui: ## run web vite dev server
 
 dev-desktop: ## run the wails desktop app in dev mode (webkit2_41 tag is required on Ubuntu 24.04+)
 	cd desktop && wails dev -tags webkit2_41
+
+# Browse/edit the dev database (data/api/mist.db) in a web UI at
+# http://localhost:8081 — the JSON-files-were-inspectable workflow,
+# SQLite edition. Safe alongside a running dev-api (WAL + busy_timeout);
+# keep doc columns valid JSON when editing.
+db-web: ## open sqlite-web on the dev mist.db (http://localhost:8081)
+	docker compose up -d sqlite-web
+	@echo "sqlite-web: http://localhost:8081"
 
 desktop-build: ## build the wails desktop binary
 	cd desktop && wails build -tags webkit2_41 -ldflags "-X main.version=$(VERSION)"

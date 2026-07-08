@@ -47,7 +47,7 @@ func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber
 				warn("auth: token with bad algorithm", "ip", c.IP(), "ua", c.Get("User-Agent"), "path", c.Path())
 			case errors.Is(err, jwt.ErrTokenMalformed):
 				warn("auth: malformed token", "ip", c.IP(), "ua", c.Get("User-Agent"), "path", c.Path())
-			// ErrTokenExpired is normal — user just needs to re-login, no warn.
+				// ErrTokenExpired is normal — user just needs to re-login, no warn.
 			}
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid token")
 		}

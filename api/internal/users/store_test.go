@@ -1,11 +1,15 @@
 package users
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/creativeyann17/go-docstore"
 )
 
 func newTestUser(id, login string) *User {
@@ -15,12 +19,30 @@ func newTestUser(id, login string) *User {
 	}
 }
 
-func TestStore_CRUD(t *testing.T) {
-	dir := t.TempDir()
-	s, err := NewStore(dir)
+// openStoreAt opens (or reopens) a store over dir — reopening the same
+// dir simulates a process restart against the same mist.db.
+func openStoreAt(t *testing.T, dir string) *Store {
+	t.Helper()
+	ds, err := docstore.Open(filepath.Join(dir, "mist.db"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("docstore open: %v", err)
 	}
+	t.Cleanup(func() { ds.Close() })
+	s, err := NewStore(ds, dir)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	return s
+}
+
+func newTestStore(t *testing.T) (*Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	return openStoreAt(t, dir), dir
+}
+
+func TestStore_CRUD(t *testing.T) {
+	s, dir := newTestStore(t)
 
 	u := newTestUser("id1", "alice")
 	if err := s.Create(u); err != nil {
@@ -45,14 +67,11 @@ func TestStore_CRUD(t *testing.T) {
 	}
 	got2, _ := s.GetByID("id1")
 	if got2.Email != "alice@example.com" || got2.UsedBytes != 42 {
-		t.Fatalf("update not persisted in memory: email=%q usedBytes=%d", got2.Email, got2.UsedBytes)
+		t.Fatalf("update not persisted: email=%q usedBytes=%d", got2.Email, got2.UsedBytes)
 	}
 
-	// Reload from disk to confirm atomic write landed.
-	s2, err := NewStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Reopen against the same db to confirm the write landed on disk.
+	s2 := openStoreAt(t, dir)
 	got3, err := s2.GetByLogin("alice")
 	if err != nil || got3.Email != "alice@example.com" || got3.UsedBytes != 42 {
 		t.Fatalf("reload: %v %+v", err, got3)
@@ -70,7 +89,7 @@ func TestStore_CRUD(t *testing.T) {
 }
 
 func TestStore_EmailTaken(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	alice := newTestUser("id1", "alice")
 	alice.Email = "shared@example.com"
 	if err := s.Create(alice); err != nil {
@@ -104,7 +123,7 @@ func TestStore_EmailTaken(t *testing.T) {
 }
 
 func TestStore_GetReturnsCopy(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	_ = s.Create(newTestUser("id1", "alice"))
 	a, _ := s.GetByID("id1")
 	a.UsedBytes = 9999
@@ -114,13 +133,12 @@ func TestStore_GetReturnsCopy(t *testing.T) {
 	}
 }
 
-// TestStore_GetReturnsDeepCopyOfSlices guards against a real bug: GetByID
-// used to return a struct copy whose slice fields still shared the
-// canonical entry's backing array. Handlers that mutate those slices in
-// place (e.g. removing a used TOTP backup code by re-slicing) would
-// corrupt data visible to any other concurrent reader of the same user.
+// TestStore_GetReturnsDeepCopyOfSlices guards the historical bug where
+// reads shared slice backing arrays with a cache. With SQLite every read
+// unmarshals fresh, so this is safe by construction — the test stays as
+// a regression guard should a cache ever come back.
 func TestStore_GetReturnsDeepCopyOfSlices(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	u := newTestUser("id1", "alice")
 	u.TOTPBackupCodes = []string{"a", "b", "c"}
 	u.TrustedDevices = []TrustedDevice{{ID: "dev1"}, {ID: "dev2"}}
@@ -151,7 +169,7 @@ func TestStore_GetReturnsDeepCopyOfSlices(t *testing.T) {
 // changed concurrently via AddUsedBytes/SetUsedBytes (e.g. an upload
 // completing) in between.
 func TestStore_UpdatePreservesUsedBytes(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	_ = s.Create(newTestUser("id1", "alice"))
 
 	stale, _ := s.GetByID("id1") // snapshot taken before the concurrent write below
@@ -174,8 +192,7 @@ func TestStore_UpdatePreservesUsedBytes(t *testing.T) {
 }
 
 func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
-	dir := t.TempDir()
-	s, _ := NewStore(dir)
+	s, dir := newTestStore(t)
 	_ = s.Create(newTestUser("id1", "alice"))
 
 	var wg sync.WaitGroup
@@ -191,27 +208,20 @@ func TestStore_ConcurrentWritesDoNotCorrupt(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Store must still be readable from disk — the concrete value is
-	// racey at the store level, we only check integrity.
-	s2, err := NewStore(dir)
-	if err != nil {
-		t.Fatalf("reload after concurrent writes: %v", err)
-	}
+	// Store must still be readable after reopening — the concrete value
+	// is racey at the store level, we only check integrity.
+	s2 := openStoreAt(t, dir)
 	if _, err := s2.GetByID("id1"); err != nil {
-		t.Fatalf("user file corrupted: %v", err)
-	}
-
-	// Sanity: the underlying file exists and is well-formed JSON.
-	if _, err := filepath.Glob(filepath.Join(dir, "users", "*.json")); err != nil {
-		t.Fatal(err)
+		t.Fatalf("store corrupted: %v", err)
 	}
 }
 
 // TestStore_AddUsedBytesConcurrentSameUserNoLostUpdates proves the
-// per-user lock (lockUser) still fully serializes concurrent writers for
-// the SAME user even though different users now run in parallel.
+// transactional read-modify-write (docstore.Update) fully serializes
+// concurrent writers for the SAME user — the guarantee the old per-user
+// mutexes provided, now valid across processes too.
 func TestStore_AddUsedBytesConcurrentSameUserNoLostUpdates(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	_ = s.Create(newTestUser("id1", "alice"))
 
 	var wg sync.WaitGroup
@@ -229,11 +239,8 @@ func TestStore_AddUsedBytesConcurrentSameUserNoLostUpdates(t *testing.T) {
 	}
 }
 
-// TestStore_DifferentUsersWriteInParallel is a smoke test that the
-// per-user lock doesn't accidentally still serialize unrelated users
-// (e.g. a regression back to a single global lock around I/O).
 func TestStore_DifferentUsersWriteInParallel(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	ids := []string{"id1", "id2", "id3", "id4", "id5"}
 	for i, id := range ids {
 		_ = s.Create(newTestUser(id, fmt.Sprintf("user%d", i)))
@@ -258,7 +265,7 @@ func TestStore_DifferentUsersWriteInParallel(t *testing.T) {
 }
 
 func TestStore_ListReturnsAllUsers(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	_ = s.Create(newTestUser("id-a", "user-a"))
 	_ = s.Create(newTestUser("id-b", "user-b"))
 	_ = s.Create(newTestUser("id-c", "user-c"))
@@ -270,7 +277,7 @@ func TestStore_ListReturnsAllUsers(t *testing.T) {
 }
 
 func TestStore_GetByIDNotFound(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	_, err := s.GetByID("nope")
 	if err != ErrNotFound {
 		t.Fatalf("GetByID(unknown) = %v, want ErrNotFound", err)
@@ -278,10 +285,67 @@ func TestStore_GetByIDNotFound(t *testing.T) {
 }
 
 func TestStore_UpdateNonExistent(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
+	s, _ := newTestStore(t)
 	ghost := newTestUser("ghost-id", "ghost")
 	err := s.Update(ghost)
 	if err == nil {
 		t.Fatal("Update on non-existent user should return error, got nil")
+	}
+}
+
+// TestStore_MigratesLegacyJSON seeds the pre-SQLite layout
+// (<dir>/users/<id>.json) and asserts the one-time import: users become
+// queryable, the legacy dir is renamed to users.pre-sqlite, and a
+// reopen does not re-import.
+func TestStore_MigratesLegacyJSON(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "users")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []*User{newTestUser("id1", "alice"), newTestUser("id2", "bob")} {
+		b, _ := json.MarshalIndent(u, "", "  ")
+		if err := os.WriteFile(filepath.Join(legacy, u.ID+".json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := openStoreAt(t, dir)
+	if u, err := s.GetByLogin("alice"); err != nil || u.ID != "id1" {
+		t.Fatalf("migrated user not found: %v %+v", err, u)
+	}
+	if len(s.List()) != 2 {
+		t.Fatalf("want 2 migrated users, got %d", len(s.List()))
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy dir should be renamed away")
+	}
+	if _, err := os.Stat(legacy + ".pre-sqlite"); err != nil {
+		t.Fatalf("backup dir missing: %v", err)
+	}
+
+	// Reopen: no legacy dir anymore, no double import.
+	s2 := openStoreAt(t, dir)
+	if n := len(s2.List()); n != 2 {
+		t.Fatalf("reopen re-imported or lost users: %d", n)
+	}
+}
+
+// TestStore_MigrationAbortsOnCorruptFile keeps the old loadAll's
+// fail-fast contract: a broken user file must abort startup loudly, not
+// silently drop an account.
+func TestStore_MigrationAbortsOnCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "users")
+	os.MkdirAll(legacy, 0o755)
+	os.WriteFile(filepath.Join(legacy, "bad.json"), []byte("{nope"), 0o600)
+
+	ds, err := docstore.Open(filepath.Join(dir, "mist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	if _, err := NewStore(ds, dir); err == nil {
+		t.Fatal("want migration error on corrupt file, got nil")
 	}
 }

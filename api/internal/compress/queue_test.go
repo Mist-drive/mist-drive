@@ -1,16 +1,40 @@
 package compress
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/creativeyann17/go-docstore"
 )
 
-func TestQueue_EnqueueDequeue(t *testing.T) {
+// newTestQueue opens a queue over a fresh docstore; the returned dir
+// can be reused with openQueueAt to simulate a restart.
+func openQueueAt(t *testing.T, dir string) *Queue {
+	t.Helper()
+	ds, err := docstore.Open(filepath.Join(dir, "mist.db"))
+	if err != nil {
+		t.Fatalf("docstore open: %v", err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	q, err := NewQueue(ds, filepath.Join(dir, "compress-queue.json"))
+	if err != nil {
+		t.Fatalf("queue init: %v", err)
+	}
+	return q
+}
+
+func newTestQueue(t *testing.T) (*Queue, string) {
+	t.Helper()
 	dir := t.TempDir()
-	q := NewQueue(filepath.Join(dir, "queue.json"))
+	return openQueueAt(t, dir), dir
+}
+
+func TestQueue_EnqueueDequeue(t *testing.T) {
+	q, _ := newTestQueue(t)
 
 	item := Item{Bucket: "b", Key: "test.zip", Size: 1024, ETag: "abc123", AddedAt: time.Now()}
 	if err := q.Enqueue(item); err != nil {
@@ -39,8 +63,7 @@ func TestQueue_EnqueueDequeue(t *testing.T) {
 }
 
 func TestQueue_FIFO(t *testing.T) {
-	dir := t.TempDir()
-	q := NewQueue(filepath.Join(dir, "queue.json"))
+	q, _ := newTestQueue(t)
 
 	keys := []string{"a.zip", "b.zip", "c.zip"}
 	for _, k := range keys {
@@ -61,16 +84,13 @@ func TestQueue_FIFO(t *testing.T) {
 }
 
 func TestQueue_PersistAcrossInstances(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "queue.json")
-
-	q1 := NewQueue(path)
+	q1, dir := newTestQueue(t)
 	if err := q1.Enqueue(Item{Key: "persist.zip", Size: 9999, AddedAt: time.Now()}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	// New Queue instance reads same file
-	q2 := NewQueue(path)
+	// New Queue instance over the same database.
+	q2 := openQueueAt(t, dir)
 	got, err := q2.Dequeue()
 	if err != nil {
 		t.Fatalf("dequeue: %v", err)
@@ -78,17 +98,10 @@ func TestQueue_PersistAcrossInstances(t *testing.T) {
 	if got == nil || got.Key != "persist.zip" || got.Size != 9999 {
 		t.Errorf("unexpected item: %+v", got)
 	}
-
-	// File should still exist but be empty array
-	b, _ := os.ReadFile(path)
-	if string(b) != "[]" {
-		t.Errorf("expected empty array file, got: %s", b)
-	}
 }
 
 func TestQueue_EmptyDequeue(t *testing.T) {
-	dir := t.TempDir()
-	q := NewQueue(filepath.Join(dir, "queue.json"))
+	q, _ := newTestQueue(t)
 
 	got, err := q.Dequeue()
 	if err != nil {
@@ -100,8 +113,7 @@ func TestQueue_EmptyDequeue(t *testing.T) {
 }
 
 func TestQueue_ConcurrentEnqueue(t *testing.T) {
-	dir := t.TempDir()
-	q := NewQueue(filepath.Join(dir, "queue.json"))
+	q, _ := newTestQueue(t)
 
 	n := 20
 	var wg sync.WaitGroup
@@ -127,6 +139,30 @@ func TestQueue_ConcurrentEnqueue(t *testing.T) {
 	}
 	if count != n {
 		t.Errorf("expected %d items, got %d", n, count)
+	}
+}
+
+// TestQueue_MigratesLegacyFile seeds the old single-file layout and
+// asserts the one-time import + rename to .pre-sqlite.
+func TestQueue_MigratesLegacyFile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "compress-queue.json")
+	items := []Item{{Key: "old.zip", Size: 7}}
+	b, _ := json.Marshal(items)
+	if err := os.WriteFile(legacy, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	q := openQueueAt(t, dir)
+	got, err := q.Dequeue()
+	if err != nil || got == nil || got.Key != "old.zip" {
+		t.Fatalf("migrated item not found: %v %+v", err, got)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy file should be renamed away")
+	}
+	if _, err := os.Stat(legacy + ".pre-sqlite"); err != nil {
+		t.Fatalf("backup file missing: %v", err)
 	}
 }
 

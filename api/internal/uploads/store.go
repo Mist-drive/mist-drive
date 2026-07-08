@@ -2,10 +2,12 @@ package uploads
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
+
+	"github.com/creativeyann17/go-docstore"
 )
 
 type State struct {
@@ -18,61 +20,42 @@ type State struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// Store persists in-flight multipart upload state as documents keyed
+// "userID/uploadID" (the old <uploads>/<uid>/<id>.json path, as an id).
 type Store struct {
-	root string
-	mu   sync.Mutex
+	c *docstore.Collection
 }
 
-func NewStore(dataDir string) (*Store, error) {
-	p := filepath.Join(dataDir, "uploads")
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		return nil, err
-	}
-	return &Store{root: p}, nil
-}
-
-func (s *Store) userDir(uid string) string { return filepath.Join(s.root, uid) }
-
-func (s *Store) Save(st *State) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d := s.userDir(st.UserID)
-	if err := os.MkdirAll(d, 0o755); err != nil {
-		return err
-	}
-	p := filepath.Join(d, st.UploadID+".json")
-	tmp := p + ".tmp"
-	b, _ := json.MarshalIndent(st, "", "  ")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
-}
-
-func (s *Store) Get(uid, uploadID string) (*State, error) {
-	b, err := os.ReadFile(filepath.Join(s.userDir(uid), uploadID+".json"))
+// NewStore opens the uploads collection. dataDir is only used to
+// migrate the legacy JSON layout on first run.
+func NewStore(ds *docstore.Store, dataDir string) (*Store, error) {
+	c, err := ds.Collection("uploads")
 	if err != nil {
 		return nil, err
 	}
-	var st State
-	if err := json.Unmarshal(b, &st); err != nil {
+	s := &Store{c: c}
+	if err := s.migrateLegacy(dataDir); err != nil {
 		return nil, err
 	}
-	return &st, nil
+	return s, nil
 }
 
-func (s *Store) Delete(uid, uploadID string) error {
-	return os.Remove(filepath.Join(s.userDir(uid), uploadID+".json"))
-}
+// migrateLegacy imports <dataDir>/uploads/<uid>/<id>.json once (when
+// the collection is empty), then renames the tree to uploads.pre-sqlite.
+// Unreadable/corrupt files are skipped, matching the old WalkAll's
+// best-effort behavior — upload state is ephemeral (hours) by nature.
+func (s *Store) migrateLegacy(dataDir string) error {
+	legacy := filepath.Join(dataDir, "uploads")
+	if _, err := os.Stat(legacy); os.IsNotExist(err) {
+		return nil
+	}
+	if n, err := s.c.Count(); err != nil || n > 0 {
+		return err
+	}
 
-// WalkAll returns all persisted upload states.
-func (s *Store) WalkAll() ([]*State, error) {
-	out := []*State{}
-	err := filepath.Walk(s.root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() || filepath.Ext(path) != ".json" {
+	imported := 0
+	filepath.Walk(legacy, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 			return nil
 		}
 		b, err := os.ReadFile(path)
@@ -80,7 +63,45 @@ func (s *Store) WalkAll() ([]*State, error) {
 			return nil
 		}
 		var st State
-		if json.Unmarshal(b, &st) == nil {
+		if json.Unmarshal(b, &st) != nil {
+			return nil
+		}
+		if s.c.Put(key(st.UserID, st.UploadID), &st) == nil {
+			imported++
+		}
+		return nil
+	})
+	if err := os.Rename(legacy, legacy+".pre-sqlite"); err != nil {
+		return err
+	}
+	slog.Info("migrated legacy upload store to sqlite", "uploads", imported, "backup", legacy+".pre-sqlite")
+	return nil
+}
+
+func key(uid, uploadID string) string { return uid + "/" + uploadID }
+
+func (s *Store) Save(st *State) error {
+	return s.c.Put(key(st.UserID, st.UploadID), st)
+}
+
+func (s *Store) Get(uid, uploadID string) (*State, error) {
+	var st State
+	if err := s.c.Get(key(uid, uploadID), &st); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *Store) Delete(uid, uploadID string) error {
+	return s.c.Delete(key(uid, uploadID))
+}
+
+// WalkAll returns all persisted upload states.
+func (s *Store) WalkAll() ([]*State, error) {
+	out := []*State{}
+	err := s.c.Each(func(id string, raw []byte) error {
+		var st State
+		if json.Unmarshal(raw, &st) == nil {
 			out = append(out, &st)
 		}
 		return nil

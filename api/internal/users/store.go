@@ -2,57 +2,70 @@ package users
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 
-	"github.com/gofrs/flock"
+	"github.com/creativeyann17/go-docstore"
 )
 
-var ErrNotFound = errors.New("user not found")
-var ErrExists = errors.New("user already exists")
+// Error identities are shared with docstore so existing errors.Is
+// checks across handlers keep working unchanged.
+var ErrNotFound = docstore.ErrNotFound
+var ErrExists = docstore.ErrExists
 
+// Store persists users as JSON documents in SQLite (see github.com/creativeyann17/go-docstore).
+// There is no in-memory cache anymore: SQLite's page cache serves hot
+// reads, and every read unmarshals a fresh copy — the old cloneUser
+// deep-copy dance is unnecessary by construction. Read-modify-write
+// sequences run through docstore.Update (a write transaction), which
+// replaces both the per-user mutexes and the flock: correct even with
+// a second process on the same database.
 type Store struct {
-	dir   string
-	mu    sync.RWMutex
-	byID  map[string]*User
-	byLog map[string]string // login -> id
-
-	// userLocksMu guards userLocks itself (map of map of mutexes is not
-	// safe for concurrent map access otherwise). userLocks holds one
-	// mutex per user id, used to serialize that user's own
-	// read-modify-write-persist sequence end to end without blocking
-	// every other user's requests on the same global lock — see
-	// lockUser.
-	userLocksMu sync.Mutex
-	userLocks   map[string]*sync.Mutex
+	c *docstore.Collection
 }
 
-func NewStore(dataDir string) (*Store, error) {
-	dir := filepath.Join(dataDir, "users")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// NewStore opens the users collection. dataDir is only used to migrate
+// a legacy JSON-file store (pre-SQLite layout) on first run.
+func NewStore(ds *docstore.Store, dataDir string) (*Store, error) {
+	c, err := ds.Collection("users",
+		docstore.WithUniqueIndex("login", "$.login"),
+		docstore.WithIndex("email", "$.email", true),
+	)
+	if err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, byID: map[string]*User{}, byLog: map[string]string{}, userLocks: map[string]*sync.Mutex{}}
-	if err := s.loadAll(); err != nil {
+	s := &Store{c: c}
+	if err := s.migrateLegacy(dataDir); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) loadAll() error {
-	entries, err := os.ReadDir(s.dir)
+// migrateLegacy imports <dataDir>/users/*.json once (only when the
+// collection is empty), then renames the directory to users.pre-sqlite
+// as a rollback-friendly backup. A corrupt legacy file aborts with a
+// clear error — same fail-fast behavior the old loadAll had.
+func (s *Store) migrateLegacy(dataDir string) error {
+	legacy := filepath.Join(dataDir, "users")
+	if _, err := os.Stat(legacy); os.IsNotExist(err) {
+		return nil
+	}
+	if n, err := s.c.Count(); err != nil || n > 0 {
+		return err
+	}
+
+	entries, err := os.ReadDir(legacy)
 	if err != nil {
 		return err
 	}
+	imported := 0
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(s.dir, e.Name()))
+		b, err := os.ReadFile(filepath.Join(legacy, e.Name()))
 		if err != nil {
 			return err
 		}
@@ -60,262 +73,127 @@ func (s *Store) loadAll() error {
 		if err := json.Unmarshal(b, &u); err != nil {
 			return fmt.Errorf("corrupt user file %s: %w", e.Name(), err)
 		}
-		s.byID[u.ID] = &u
-		s.byLog[u.Login] = u.ID
+		if err := s.c.Put(u.ID, &u); err != nil {
+			return fmt.Errorf("migrate user %s: %w", u.ID, err)
+		}
+		imported++
 	}
+	if err := os.Rename(legacy, legacy+".pre-sqlite"); err != nil {
+		return err
+	}
+	slog.Info("migrated legacy user store to sqlite", "users", imported, "backup", legacy+".pre-sqlite")
 	return nil
 }
 
-func (s *Store) path(id string) string { return filepath.Join(s.dir, id+".json") }
-
-// cloneUser returns a deep copy of u's slice fields on top of a struct
-// copy. A plain `cp := *u` only copies slice headers — TOTPBackupCodes,
-// TrustedDevices and LoginHistory would still share the canonical entry's
-// backing array. Callers (handlers_totp.go, handlers_devices.go) mutate
-// those slices in place (element removal via re-slicing), which would
-// otherwise corrupt data visible to concurrent readers of the same user
-// before Update() ever runs. Every read path (GetByID, GetByLogin, List)
-// must go through this, not a bare struct copy.
-func cloneUser(u *User) *User {
-	cp := *u
-	if u.TOTPBackupCodes != nil {
-		cp.TOTPBackupCodes = append([]string(nil), u.TOTPBackupCodes...)
-	}
-	if u.TrustedDevices != nil {
-		cp.TrustedDevices = append([]TrustedDevice(nil), u.TrustedDevices...)
-	}
-	if u.LoginHistory != nil {
-		cp.LoginHistory = append([]LoginRecord(nil), u.LoginHistory...)
-	}
-	return &cp
-}
-
-// lockUser returns an unlock func that serializes all writes for one user
-// id. Each user gets its own *sync.Mutex (created lazily), so two users'
-// writes — including the disk flock+write+rename in writeLocked, which
-// used to run under the single store-wide s.mu — proceed fully in
-// parallel. A single user's operations remain strictly ordered end to
-// end, which is what actually prevents lost updates; the global s.mu
-// below is only ever held for brief in-memory map access, never I/O.
-func (s *Store) lockUser(id string) func() {
-	s.userLocksMu.Lock()
-	l, ok := s.userLocks[id]
-	if !ok {
-		l = &sync.Mutex{}
-		s.userLocks[id] = l
-	}
-	s.userLocksMu.Unlock()
-	l.Lock()
-	return l.Unlock
-}
-
-func (s *Store) writeLocked(u *User) error {
-	p := s.path(u.ID)
-	lk := flock.New(p + ".lock")
-	if err := lk.Lock(); err != nil {
-		return err
-	}
-	defer lk.Unlock()
-	tmp := p + ".tmp"
-	b, _ := json.MarshalIndent(u, "", "  ")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
-}
-
-// Create is not on the per-user-lock fast path: lockUser is keyed by ID,
-// but uniqueness here is by Login, which doesn't exist as a key yet for a
-// brand-new user. Two concurrent signups with different IDs but the same
-// desired login would otherwise both pass the existence check under
-// separate per-user locks. Account creation is rare (admin-driven, not a
-// hot path), so it stays under the single store-wide lock for its whole
-// body — correctness over parallelism here.
+// Create stores a new user. Login uniqueness is enforced by the unique
+// index — a concurrent duplicate signup loses with ErrExists, no global
+// lock needed.
 func (s *Store) Create(u *User) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.byLog[u.Login]; ok {
-		return ErrExists
-	}
-	if err := s.writeLocked(u); err != nil {
-		return err
-	}
-	s.byID[u.ID] = u
-	s.byLog[u.Login] = u.ID
-	return nil
+	return s.c.Insert(u.ID, u)
 }
 
 // AddUsedBytes atomically adds delta (which may be negative) to the
-// user's UsedBytes and persists the change. The whole read-modify-write
-// runs under that one user's lock (lockUser) so concurrent completes or
-// deletes for the SAME user can't race each other and clobber the total —
-// a plain GetByID/Update pattern in a handler would, because GetByID
-// returns a copy of the user taken before the lock is released. Other
-// users' writes are unaffected — they hold a different per-user lock —
-// so this never blocks on unrelated users' disk I/O.
-//
-// Clamps at zero on over-subtract (defensive: the reservation layer
-// should already make UsedBytes monotonically consistent with reality,
-// but we'd rather show 0 than a negative number if anything slips).
+// user's UsedBytes. The read-modify-write runs in a single write
+// transaction, so concurrent completes/deletes for the same user can't
+// clobber the total. Clamps at zero on over-subtract (defensive: we'd
+// rather show 0 than a negative number if accounting slips).
 func (s *Store) AddUsedBytes(id string, delta int64) error {
-	unlock := s.lockUser(id)
-	defer unlock()
-
-	s.mu.RLock()
-	orig, ok := s.byID[id]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrNotFound
-	}
-
-	u := cloneUser(orig)
-	u.UsedBytes += delta
-	if u.UsedBytes < 0 {
-		u.UsedBytes = 0
-	}
-	if err := s.writeLocked(u); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.byID[id] = u
-	s.mu.Unlock()
-	return nil
+	return s.c.Update(id, func(raw []byte) ([]byte, error) {
+		var u User
+		if err := json.Unmarshal(raw, &u); err != nil {
+			return nil, err
+		}
+		u.UsedBytes += delta
+		if u.UsedBytes < 0 {
+			u.UsedBytes = 0
+		}
+		return json.Marshal(&u)
+	})
 }
 
-// SetUsedBytes overwrites the user's UsedBytes with an authoritative
-// value (e.g. recomputed from a full S3 listing). Same locking rules as
-// AddUsedBytes — must not race concurrent completes/deletes for the same
-// user, must not block other users' writes.
+// SetUsedBytes overwrites UsedBytes with an authoritative value (e.g.
+// recomputed from a full S3 listing). Same transactional rules as
+// AddUsedBytes.
 func (s *Store) SetUsedBytes(id string, v int64) error {
-	unlock := s.lockUser(id)
-	defer unlock()
-
-	s.mu.RLock()
-	orig, ok := s.byID[id]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrNotFound
-	}
-
 	if v < 0 {
 		v = 0
 	}
-	u := cloneUser(orig)
-	u.UsedBytes = v
-	if err := s.writeLocked(u); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.byID[id] = u
-	s.mu.Unlock()
-	return nil
+	return s.c.Update(id, func(raw []byte) ([]byte, error) {
+		var u User
+		if err := json.Unmarshal(raw, &u); err != nil {
+			return nil, err
+		}
+		u.UsedBytes = v
+		return json.Marshal(&u)
+	})
 }
 
-// Update persists the given user record, replacing the in-memory copy.
-// Callers fetch via GetByID, mutate a field, and call Update — but that
-// copy may be stale by the time it lands here. UsedBytes has dedicated
-// atomic accessors (AddUsedBytes/SetUsedBytes) precisely because it's
-// updated from concurrent, independent flows (uploads completing,
-// deletes, recounts) that race ordinary Get-then-Update callers (e.g.
-// device revoke, TOTP enable). No Update caller legitimately sets
-// UsedBytes, so we always keep the live value rather than the caller's
-// possibly-stale snapshot — otherwise a concurrent upload's accounting
-// gets silently overwritten. The whole sequence runs under this user's
-// lock so it can't interleave with that user's own AddUsedBytes/
-// SetUsedBytes calls; other users' I/O is unaffected.
+// Update persists the given user record. Callers fetch via GetByID,
+// mutate a field, and call Update — but that snapshot may be stale for
+// UsedBytes, which is updated by concurrent independent flows (uploads
+// completing, deletes, recounts). No Update caller legitimately sets
+// UsedBytes, so the live value always wins over the caller's snapshot;
+// the transaction makes the merge atomic.
 func (s *Store) Update(u *User) error {
-	unlock := s.lockUser(u.ID)
-	defer unlock()
-
-	s.mu.RLock()
-	current, ok := s.byID[u.ID]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrNotFound
-	}
-
-	u.UsedBytes = current.UsedBytes
-	if err := s.writeLocked(u); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.byID[u.ID] = u
-	s.mu.Unlock()
-	return nil
+	return s.c.Update(u.ID, func(raw []byte) ([]byte, error) {
+		var current User
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return nil, err
+		}
+		u.UsedBytes = current.UsedBytes
+		return json.Marshal(u)
+	})
 }
 
 func (s *Store) Delete(id string) error {
-	unlock := s.lockUser(id)
-	defer unlock()
-
-	s.mu.RLock()
-	u, ok := s.byID[id]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrNotFound
-	}
-
-	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	s.mu.Lock()
-	delete(s.byID, id)
-	delete(s.byLog, u.Login)
-	s.mu.Unlock()
-	return nil
+	return s.c.Delete(id)
 }
 
 func (s *Store) GetByID(id string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if u, ok := s.byID[id]; ok {
-		return cloneUser(u), nil
+	var u User
+	if err := s.c.Get(id, &u); err != nil {
+		return nil, err
 	}
-	return nil, ErrNotFound
+	return &u, nil
+}
+
+func (s *Store) GetByLogin(login string) (*User, error) {
+	var u User
+	if err := s.c.GetBy("login", login, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // EmailTaken reports whether email is already used by a user other than
-// exceptID (pass "" when creating a new user). Comparison is
-// case-insensitive; an empty email is never considered taken. Email is
-// only an index in memory — there's no DB — so we scan; the user set is
-// small.
+// exceptID (pass "" when creating a new user). Case-insensitive via the
+// NOCASE index; an empty email is never considered taken.
 func (s *Store) EmailTaken(email, exceptID string) bool {
 	if email == "" {
 		return false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for id, u := range s.byID {
-		if id == exceptID {
-			continue
-		}
-		if strings.EqualFold(u.Email, email) {
-			return true
-		}
+	taken, err := s.c.ExistsBy("email", email, exceptID)
+	if err != nil {
+		slog.Error("email lookup failed", "err", err)
+		return false
 	}
-	return false
+	return taken
 }
 
-func (s *Store) GetByLogin(login string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, ok := s.byLog[login]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return cloneUser(s.byID[id]), nil
-}
-
+// List returns every user. Errors are logged, not returned, to keep the
+// historical signature; the collection is small (admin UI listing).
 func (s *Store) List() []*User {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*User, 0, len(s.byID))
-	for _, u := range s.byID {
-		out = append(out, cloneUser(u))
+	out := []*User{}
+	err := s.c.Each(func(id string, raw []byte) error {
+		var u User
+		if err := json.Unmarshal(raw, &u); err != nil {
+			return fmt.Errorf("corrupt user %s: %w", id, err)
+		}
+		out = append(out, &u)
+		return nil
+	})
+	if err != nil {
+		slog.Error("user list failed", "err", err)
 	}
 	return out
 }

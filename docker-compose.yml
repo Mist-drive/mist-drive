@@ -66,6 +66,24 @@ services:
       - "1025:1025"   # SMTP (no auth, no TLS — internal only)
     mem_limit: 64m
 
+  sqlite-web:
+    # Browse/edit mist.db in a web UI — the "JSON files were readable"
+    # workflow, SQLite edition. Upstream only publishes :latest, so it's
+    # pinned by digest. Safe alongside a running API (WAL+busy_timeout);
+    # when editing a doc column, keep it valid JSON.
+    image: coleifer/sqlite-web@sha256:1e5b86237968ed747554f951c6df2fc2fe4bf4ef070b8ca23d553d7f6c6426f7
+    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "/data/mist.db"]
+    volumes:
+      - ./data/api:/data
+    # Loopback-only on purpose: this UI has no auth and edits live data.
+    # In a real deployment put it behind your reverse proxy's auth (see
+    # the cy17 stack's sqlite-web service) or just don't ship it.
+    ports:
+      - "127.0.0.1:8081:8080"   # web UI → http://localhost:8081
+    restart: unless-stopped
+    mem_limit: 64m
+    cpus: 0.25
+
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"

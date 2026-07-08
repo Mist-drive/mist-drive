@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/creativeyann17/go-docstore"
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
@@ -107,11 +109,16 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 		PresignDownload: 5 * time.Minute,
 	}
 
-	uStore, err := users.NewStore(dataDir)
+	ds, err := docstore.Open(filepath.Join(dataDir, "mist.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	upStore, err := uploads.NewStore(dataDir)
+	t.Cleanup(func() { ds.Close() })
+	uStore, err := users.NewStore(ds, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upStore, err := uploads.NewStore(ds, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

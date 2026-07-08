@@ -37,6 +37,11 @@ type Logger struct {
 	skipPaths map[string]struct{}
 }
 
+// Slog exposes the underlying *slog.Logger for packages that take a
+// standard logger (e.g. pkg/docstore), so their records flow through
+// the same fanout handlers (stdout text + rotated JSON file).
+func (l *Logger) Slog() *slog.Logger { return l.sl }
+
 // New creates a new Logger with the given config.
 // stdout -> text handler, file -> json handler, both level-filtered.
 func New(cfg Config) *Logger {

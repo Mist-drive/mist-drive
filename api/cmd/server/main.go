@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
 
+	"github.com/creativeyann17/go-docstore"
 	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/compress"
 	"github.com/yann/mist-drive/api/internal/config"
@@ -40,11 +41,24 @@ func main() {
 		Compress:    true,
 	})
 
-	userStore, err := users.NewStore(cfg.DataDir)
+	// One SQLite database for all document stores (users, uploads,
+	// compress queue). WAL mode: safe for this process plus any future
+	// CLI/tool reading the same file. Legacy JSON layouts are migrated
+	// on first boot by each store (renamed to *.pre-sqlite).
+	ds, err := docstore.Open(filepath.Join(cfg.DataDir, "mist.db"))
+	if err != nil {
+		appLog.Fatal("docstore open: %v", err)
+	}
+	defer ds.Close()
+	// Per-operation debug records (op/collection/id/duration) appear
+	// under LOG_LEVEL=DEBUG through the app's own handlers.
+	ds.SetLogger(appLog.Slog().With("component", "docstore"))
+
+	userStore, err := users.NewStore(ds, cfg.DataDir)
 	if err != nil {
 		appLog.Fatal("users store init: %v", err)
 	}
-	uploadStore, err := uploads.NewStore(cfg.DataDir)
+	uploadStore, err := uploads.NewStore(ds, cfg.DataDir)
 	if err != nil {
 		appLog.Fatal("uploads store init: %v", err)
 	}
@@ -79,7 +93,10 @@ func main() {
 	// COMPRESS_WORKERS=0 (default) disables compression entirely — no queue
 	// is created and uploads are never enqueued, saving disk and CPU.
 	if cfg.CompressWorkers > 0 {
-		compressQueue := compress.NewQueue(filepath.Join(cfg.DataDir, "compress-queue.json"))
+		compressQueue, err := compress.NewQueue(ds, filepath.Join(cfg.DataDir, "compress-queue.json"))
+		if err != nil {
+			appLog.Fatal("compress queue init: %v", err)
+		}
 		srv.CompressQueue = compressQueue
 		go compress.Start(cfg, compressQueue, s3c, eventsHub, srv, userStore, appLog.With("component", "compress"))
 	}

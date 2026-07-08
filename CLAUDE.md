@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Mist Drive
 
-Self-hosted drive. Go Fiber API + Vite/Bun/React SPA + MinIO object storage. No database — per-user JSON files on disk with file-lock concurrency. Wails desktop client with system tray, sync engine, and file browser. The API embeds the built SPA via `//go:embed` so it ships as a single binary/container.
+Self-hosted drive. Go Fiber API + Vite/Bun/React SPA + MinIO object storage. Documents (users, upload state, compress queue) live in a single SQLite file `<DATA_DIR>/mist.db` via the [go-docstore](https://github.com/creativeyann17/go-docstore) library (pure-Go SQLite, WAL — safe for a second process such as a CLI tool; legacy JSON layouts auto-migrate on first boot and are renamed `*.pre-sqlite`). Wails desktop client with system tray, sync engine, and file browser. The API embeds the built SPA via `//go:embed` so it ships as a single binary/container.
 
 ## Commands
 
@@ -30,8 +30,10 @@ Wails bindings regen: `cd desktop && wails generate module`
 
 - **Entrypoint**: `cmd/server/main.go` — boots config, stores, S3 client, bootstraps admin user, starts upload GC goroutine, mounts routes + embedded SPA.
 - **`internal/httpx/`** — HTTP layer. `Server` struct holds all deps. Route registration in `handlers.go`, handlers split by concern: `handlers_auth.go`, `handlers_files.go`, `handlers_upload.go`, `handlers_admin.go`, `handlers_ws.go`, `handlers_totp.go`, `handlers_devices.go`. `middleware.go` has JWT auth + admin guard + token-version check.
-- **`internal/users/`** — JSON-file-backed user store with in-memory index + `flock` for disk writes. No database.
-- **`internal/uploads/`** — Multipart upload state persistence (also JSON files). `gc.go` reclaims stale uploads.
+- **Storage lib**: `github.com/creativeyann17/go-docstore` v0.1.0 (extracted from here) — SQLite document collections, generated-column indexes, transactional `Update` as THE read-modify-write primitive. No app-level cache anywhere: SQLite's page cache is the cache and is never stale across processes. Browse/edit the db via `make db-web` (sqlite-web) or the `godocstore` CLI.
+- **`internal/users/`** — thin wrapper over docstore collection `users` (unique `login` index, NOCASE `email` index). `Update` preserves live `UsedBytes` inside the transaction; `AddUsedBytes`/`SetUsedBytes` are transactional (no lost updates, cross-process safe). Legacy `<DATA_DIR>/users/*.json` migrates on first boot.
+- **`internal/uploads/`** — upload state in docstore collection `uploads`, ids are `userID/uploadID`. `gc.go` reclaims stale uploads (unchanged).
+- **Backup note**: `mist.db` uses WAL — never `cp` it while the API runs; stop first, or use `VACUUM INTO 'backup.db'`. Multi-process readers are fine; horizontal API replicas are still NOT (login throttle + quota reservations are in-memory).
 - **`internal/s3x/`** — MinIO/S3 client wrapper (presigned URLs, bucket ops).
 - **`internal/config/`** — All config from env vars. Required: `JWT_SECRET`, `ADMIN_PASSWORD`, `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`. Defaults: `DATA_DIR=./data`, `LOG_PATH=./logs/app.log`, `MAX_ZIP_BYTES=20GiB`, `ZIP_STREAM_TIMEOUT=30m` (Go duration; max wall-time for one folder-zip stream — the download ticket TTL only gates the start, this bounds the whole transfer). Optional SMTP block: `SMTP_HOST/PORT/USER/PASSWORD/FROM/TLS` — all empty by default (email disabled).
 - **`internal/notify/`** — `Mailer` wrapping `go-mail`. `Enabled()` guards all sends. `SendNewIP` / `SendFailedLogin`. No-op when `SMTP_HOST` is empty.
