@@ -39,7 +39,20 @@ export default function Files() {
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
 
+  // Single-flight refresh. During a mass upload the server emits a
+  // files-changed event every ~750ms while each list can take seconds
+  // (MinIO busy ingesting) — without this guard refreshes STACK until
+  // the browser's ~6-connections-per-origin pool is exhausted and every
+  // request (even /me) sits pending, which looks like a dead API.
+  // Instead: one refresh in flight, at most one queued behind it.
+  const refreshing = useRef(false)
+  const refreshQueued = useRef(false)
   const refresh = async () => {
+    if (refreshing.current) {
+      refreshQueued.current = true
+      return
+    }
+    refreshing.current = true
     try {
       const [listResp, u] = await Promise.all([api.listFiles(), api.me()])
       setFiles(listResp.objects)
@@ -47,7 +60,13 @@ export default function Files() {
       setMe(u)
       const tok = getToken()
       if (tok) setSession(tok, u)
-    } catch (e: any) { setErr(e.message) }
+    } catch (e: any) { setErr(e.message) } finally {
+      refreshing.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        refresh() // pick up whatever changed while we were busy
+      }
+    }
   }
   useEffect(() => { refresh() }, [])
 

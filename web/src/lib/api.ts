@@ -149,6 +149,12 @@ document.addEventListener('visibilitychange', () => {
 export const NETWORK_ERROR = 'NETWORK'
 function serverLost() {
   if (window.location.pathname === '/login') return
+  // An OPEN push channel is proof of life: if we're still receiving
+  // websocket frames the server is up, and whatever failed was local
+  // congestion (e.g. the browser's per-origin connection pool jammed
+  // by a refresh storm during a mass upload). Never log the user out
+  // on a false positive.
+  if (_ws && _ws.readyState === WebSocket.OPEN) return
   sessionStorage.setItem('mist.notice', 'serverLost')
   clearSession()
   window.location.replace('/login')

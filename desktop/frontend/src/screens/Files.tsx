@@ -62,7 +62,19 @@ export default function Files({ onQuotaChange, user }: Props) {
   const replaceResolve = useRef<((choice: 'replace' | 'diff' | 'cancel') => void) | null>(null)
   const confirm = useConfirm()
 
+  // Single-flight refresh (mirrors the web app): during a mass upload
+  // files-changed events arrive every ~750ms while each list can take
+  // seconds — without this guard refreshes stack into unbounded
+  // parallel list requests against the API/MinIO. One in flight, at
+  // most one queued behind it.
+  const refreshing = useRef(false)
+  const refreshQueued = useRef(false)
   const refresh = async () => {
+    if (refreshing.current) {
+      refreshQueued.current = true
+      return
+    }
+    refreshing.current = true
     startLoading()
     try {
       const resp = await ListFiles()
@@ -74,7 +86,14 @@ export default function Files({ onQuotaChange, user }: Props) {
       if (isNetworkError(e)) { notifyServerLost(); return }
       setErr(String(e?.message ?? e))
     }
-    finally { endLoading() }
+    finally {
+      endLoading()
+      refreshing.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        refresh()
+      }
+    }
   }
   useEffect(() => {
     refresh()
