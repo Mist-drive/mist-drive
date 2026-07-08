@@ -110,6 +110,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 
 ### Larger features
 - **Share links** — time-limited presigned URLs for files without requiring login
+- **2-replica readiness (zero-downtime rolling deploys)** — the storage layer is multi-process safe (go-docstore/WAL) but four in-memory subsystems block `replicas: 2`: login throttle (`throttle.go` — replicas multiply brute-force budget), quota reservations (`internal/quota` — double-spend), WS event hub (cross-replica events lost; sticky sessions DON'T help, desktop+browser of one user land on different replicas), compress processing tracker. Path: move all four into shared mist.db collections via go-docstore (`Update` = the cross-process atomic primitive; events via a small poll on an `events` collection). Only then set replicas+Traefik LB on the stack.
 
 ### Done
 - ~~**Desktop OS notifications**~~ — sync engine fires native notifications via `beeep` (gated by a per-user `Notifications` toggle): one coalesced "↑N ↓M" per pass + deduped error notifications; idle passes silent. See the "Desktop OS notifications" pattern above.
