@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mist Drive
+Comment=Self-hosted file sync
+Exec=mist-drive
+Icon=mist-drive
+Terminal=false
+Categories=Network;FileTransfer;Utility;
+StartupWMClass=mist-drive-desktop

@@ -30,10 +30,20 @@ func IsDevBinary() bool {
 	return strings.Contains(filepath.Base(p), "-dev-")
 }
 
-// execPath returns the absolute path to the currently running
-// executable, resolving symlinks so the launcher entry points at the
-// real file (not a wrapper symlink the user might delete).
-func execPath() (string, error) {
+// ExecPath returns the absolute path to use as the Exec= target in a
+// generated .desktop file, resolving symlinks so it points at the real
+// file (not a wrapper symlink the user might delete).
+//
+// Inside an AppImage, os.Executable() resolves to a path under the
+// per-run FUSE mount (/tmp/.mount_*), which is torn down the moment
+// this process exits — any .desktop entry written with that path 404s
+// on the next launch. The AppImage runtime sets $APPIMAGE to the
+// actual, stable path of the .AppImage file on disk, so that takes
+// priority whenever it's set.
+func ExecPath() (string, error) {
+	if appImage := os.Getenv("APPIMAGE"); appImage != "" {
+		return appImage, nil
+	}
 	p, err := os.Executable()
 	if err != nil {
 		return "", err

@@ -16,7 +16,7 @@ import (
 // Idempotent by design: every call rewrites both files atomically,
 // so moving the binary and relaunching updates the menu entry.
 func Install(iconPNG []byte) error {
-	exe, err := execPath()
+	exe, err := ExecPath()
 	if err != nil {
 		return fmt.Errorf("exec path: %w", err)
 	}

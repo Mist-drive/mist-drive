@@ -1,6 +1,10 @@
 VERSION ?= dev
 
-.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build db-web run stop test test-unit test-integration clean
+# Extra ldflags for the AppImage build only (e.g. CI:
+# make appimage LDFLAGS="-s -w -X main.version=1.2.3 -X main.commit=abc1234").
+LDFLAGS ?= -X main.version=$(VERSION)
+
+.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build appimage db-web run stop test test-unit test-integration clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -54,6 +58,29 @@ db-web: ## open sqlite-web on the dev mist.db (http://localhost:8081)
 
 desktop-build: ## build the wails desktop binary
 	cd desktop && wails build -tags webkit2_41 -ldflags "-X main.version=$(VERSION)"
+
+# Packages desktop/build/bin/mist-drive as an AppImage. linuxdeploy +
+# its plugin are cached in desktop/build/bin/ (gitignored) so repeat
+# runs skip the download. Same tool/flags as CI's release.yml.
+appimage: ## build the desktop AppImage (Linux)
+	cd desktop && wails build -tags webkit2_41 -ldflags "$(LDFLAGS)"
+	@test -x desktop/build/bin/linuxdeploy.AppImage || { \
+		curl -Lo desktop/build/bin/linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage; \
+		chmod +x desktop/build/bin/linuxdeploy.AppImage; \
+	}
+	@test -x desktop/build/bin/linuxdeploy-plugin-appimage.AppImage || { \
+		curl -Lo desktop/build/bin/linuxdeploy-plugin-appimage.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage; \
+		chmod +x desktop/build/bin/linuxdeploy-plugin-appimage.AppImage; \
+	}
+	rm -rf desktop/build/bin/appdir
+	APPIMAGE_EXTRACT_AND_RUN=1 PATH="$(CURDIR)/desktop/build/bin:$$PATH" desktop/build/bin/linuxdeploy.AppImage \
+		--appdir desktop/build/bin/appdir \
+		--executable desktop/build/bin/mist-drive \
+		--desktop-file desktop/build/linux/mist-drive.desktop \
+		--icon-file desktop/build/linux/mist-drive.png \
+		--output appimage
+	mv Mist_Drive-x86_64.AppImage desktop/build/bin/mist-drive-x86_64.AppImage
+	@echo "AppImage: desktop/build/bin/mist-drive-x86_64.AppImage"
 
 run: install-data ## docker compose up — mist-drive + minio, no TLS, no reverse proxy
 	docker compose up --build
