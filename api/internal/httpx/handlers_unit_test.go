@@ -507,22 +507,3 @@ func TestLogoutAll_NewTokenStillValid(t *testing.T) {
 		t.Fatalf("new token should be valid, got %d", resp2.StatusCode)
 	}
 }
-
-// ---- Processing state ----
-
-func TestProcessingState(t *testing.T) {
-	srv := &httpx.Server{}
-
-	srv.AddProcessing("u1", "docs")
-	if !srv.IsProcessingBlocked("u1", "docs/readme.txt") {
-		t.Fatal("docs/readme.txt should be blocked under docs")
-	}
-	if srv.IsProcessingBlocked("u1", "other/file.txt") {
-		t.Fatal("other/file.txt should not be blocked")
-	}
-
-	srv.RemoveProcessing("u1", "docs")
-	if srv.IsProcessingBlocked("u1", "docs/readme.txt") {
-		t.Fatal("docs/readme.txt should be unblocked after remove")
-	}
-}

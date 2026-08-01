@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { GetFeatures, Logout, Me } from '../wailsjs/go/main/App'
 import { apiclient } from '../wailsjs/go/models'
-import { ConfirmProvider } from './components/ConfirmDialog'
+import { ConfirmProvider } from '@shared/components/ConfirmDialog'
 import LoadingBar from '@shared/components/LoadingBar'
 import { startLoading, endLoading } from '@shared/lib/loading'
 import { onSessionExpired, onServerLost } from './session'

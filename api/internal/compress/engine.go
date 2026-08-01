@@ -10,9 +10,10 @@ import (
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/logger"
 	"github.com/yann/mist-drive/api/internal/s3x"
+	"github.com/yann/mist-drive/api/internal/users"
 )
 
-func Start(cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quota QuotaUpdater, log *logger.Logger) {
+func Start(cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quota *users.Store, log *logger.Logger) {
 	tmpDir := filepath.Join(cfg.DataDir, "compress-tmp")
 	if err := os.RemoveAll(tmpDir); err != nil {
 		log.Warn("[compress] cleanup tmp on start: %v", err)
@@ -25,7 +26,7 @@ func Start(cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, track
 	}
 }
 
-func runWorker(id int, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quota QuotaUpdater, log *logger.Logger) {
+func runWorker(id int, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quota *users.Store, log *logger.Logger) {
 	log.Info("[compress] worker-%d started", id)
 	tick := func() {
 		item, err := q.Dequeue()

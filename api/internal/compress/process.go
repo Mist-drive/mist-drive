@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	gcompress "github.com/creativeyann17/go-delta/pkg/compress"
-	gdecompress "github.com/creativeyann17/go-delta/pkg/decompress"
-	"github.com/creativeyann17/go-delta/pkg/verify"
+	gcompress "github.com/creativeyann17/go-zip/pkg/compress"
+	gdecompress "github.com/creativeyann17/go-zip/pkg/decompress"
+	"github.com/creativeyann17/go-zip/pkg/verify"
 	"github.com/google/uuid"
 
 	"github.com/yann/mist-drive/api/internal/config"
@@ -23,6 +23,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/logger"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
+	"github.com/yann/mist-drive/api/internal/users"
 )
 
 // minSavingPct is the minimum percentage improvement required before we replace
@@ -216,7 +217,7 @@ func downloadObject(ctx context.Context, s3c *s3x.Client, item Item, dest string
 
 // replaceObject validates the ETag hasn't changed since enqueue, uploads the
 // result file, updates quota, and notifies the hub.
-func replaceObject(ctx context.Context, item Item, resultPath string, resultSize int64, contentType string, s3c *s3x.Client, quotaUpdater QuotaUpdater, hub *events.Hub, log *logger.Logger) error {
+func replaceObject(ctx context.Context, item Item, resultPath string, resultSize int64, contentType string, s3c *s3x.Client, quotaUpdater *users.Store, hub *events.Hub, log *logger.Logger) error {
 	_, currentETag, err := s3c.StatObjectFull(ctx, item.Bucket, item.Key)
 	if err != nil {
 		log.Info("[compress] skipped key=%s reason=object_deleted", item.Key)
@@ -255,7 +256,7 @@ func replaceObject(ctx context.Context, item Item, resultPath string, resultSize
 	return nil
 }
 
-func processItem(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater QuotaUpdater, log *logger.Logger) error {
+func processItem(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater *users.Store, log *logger.Logger) error {
 	if hasSource, err := s3c.HasSourceMeta(ctx, item.Bucket, item.Key); err == nil && hasSource {
 		log.Info("[compress] skipped key=%s reason=already_compressed", item.Key)
 		return nil
@@ -273,7 +274,7 @@ func processItem(ctx context.Context, item Item, cfg *config.Config, q *Queue, s
 	}
 }
 
-func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater QuotaUpdater, log *logger.Logger) error {
+func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater *users.Store, log *logger.Logger) error {
 	free := quota.DiskFree(cfg.DataDir)
 	needed := item.Size*3 + 1<<30
 	if free > 0 && free < needed {
@@ -295,7 +296,7 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 	tmpZip := filepath.Join(tmpDir, "source.zip")
 	extractDir := filepath.Join(tmpDir, "extracted")
 	recompressBase := filepath.Join(tmpDir, "result")
-	recompressFile := recompressBase + "_01.zip"
+	recompressFile := recompressBase + ".zip" // MaxThreads:1 below → go-zip writes base.zip, not base_01.zip
 
 	log.Debug("[compress] downloading key=%s", item.Key)
 	if err := downloadObject(ctx, s3c, item, tmpZip); err != nil {
@@ -333,12 +334,11 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 
 	log.Debug("[compress] recompressing key=%s level=%d", item.Key, cfg.CompressLevel)
 	compResult, err := gcompress.Compress(&gcompress.Options{
-		InputPath:    extractDir,
-		OutputPath:   recompressBase,
-		UseZipFormat: true,
-		Level:        cfg.CompressLevel,
-		MaxThreads:   1,
-		Quiet:        true,
+		InputPath:  extractDir,
+		OutputPath: recompressBase,
+		Level:      cfg.CompressLevel,
+		MaxThreads: 1,
+		Quiet:      true,
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("compress: %w", err)
@@ -351,7 +351,7 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 	}
 	log.Debug("[compress] recompressed key=%s ratio=%.1f%%", item.Key, compResult.CompressionRatio())
 
-	log.Debug("[compress] verifying key=%s (go-delta)", item.Key)
+	log.Debug("[compress] verifying key=%s (go-zip)", item.Key)
 	verResult, verErr := verify.Verify(&verify.Options{
 		InputPath:  recompressFile,
 		VerifyData: true,
@@ -362,7 +362,7 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 			item.Key, verErr, verResult != nil && verResult.IsValid())
 		return nil
 	}
-	log.Debug("[compress] go-delta verify ok key=%s files=%d", item.Key, verResult.FileCount)
+	log.Debug("[compress] go-zip verify ok key=%s files=%d", item.Key, verResult.FileCount)
 
 	log.Debug("[compress] verifying key=%s (archive/zip)", item.Key)
 	if err := validateZip(recompressFile); err != nil {
@@ -385,7 +385,7 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 	return replaceObject(ctx, item, recompressFile, resultSize, "application/zip", s3c, quotaUpdater, hub, log)
 }
 
-func processJPEG(ctx context.Context, item Item, cfg *config.Config, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater QuotaUpdater, log *logger.Logger) error {
+func processJPEG(ctx context.Context, item Item, cfg *config.Config, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater *users.Store, log *logger.Logger) error {
 	free := quota.DiskFree(cfg.DataDir)
 	needed := item.Size*2 + 256<<20
 	if free > 0 && free < needed {

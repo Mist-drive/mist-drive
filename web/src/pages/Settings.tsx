@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import { api, clearSession, type PublicDevice, type LoginRecord } from '../lib/api'
-import { useConfirm } from '../components/ConfirmDialog'
+import { useConfirm } from '@shared/components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
 type Phase =

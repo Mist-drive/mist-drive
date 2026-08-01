@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { type ObjectInfo } from '../../lib/api'
 import { uploadFile } from '../../lib/uploader'
-import { type ConflictEntry } from '../../components/ReplaceDialog'
+import { type ConflictEntry } from '@shared/components/ReplaceDialog'
 import { type UploadEntry } from '@shared/lib/upload'
 import { useTranslation } from '@shared/lib/i18n'
 

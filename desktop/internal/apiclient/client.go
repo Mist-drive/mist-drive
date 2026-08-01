@@ -401,7 +401,7 @@ func (c *Client) PreviewFile(key string) (PreviewResult, error) {
 		if err != nil {
 			return PreviewResult{}, err
 		}
-		return PreviewResult{Type: "image", Content: "data:image/jpeg;base64," + encodeBase64(data)}, nil
+		return PreviewResult{Type: "image", Content: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)}, nil
 	case "text":
 		data, err := io.ReadAll(res.Body)
 		if err != nil {
@@ -584,10 +584,6 @@ func (c *Client) putPart(ctx context.Context, url string, body io.Reader, size i
 	}
 	etag := strings.Trim(res.Header.Get("ETag"), `"`)
 	return etag, nil
-}
-
-func encodeBase64(b []byte) string {
-	return base64.StdEncoding.EncodeToString(b)
 }
 
 func urlEscape(s string) string {

@@ -3,8 +3,8 @@ module github.com/yann/mist-drive/api
 go 1.26.2
 
 require (
-	github.com/creativeyann17/go-delta v1.4.3
 	github.com/creativeyann17/go-docstore v0.1.0
+	github.com/creativeyann17/go-zip v1.0.0
 	github.com/fasthttp/websocket v1.5.3
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/gofiber/websocket/v2 v2.2.1
@@ -30,8 +30,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/clipperhouse/stringish v0.1.1 // indirect
-	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
@@ -50,13 +49,13 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lufia/plan9stats v0.0.0-20250317134145-8bc96cf8fc35 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.19 // indirect
+	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/minio/crc64nvme v1.0.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -82,13 +81,11 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
-	github.com/vbauerster/mpb/v8 v8.11.3 // indirect
+	github.com/vbauerster/mpb/v8 v8.12.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

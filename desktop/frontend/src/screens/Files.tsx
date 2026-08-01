@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useConfirm } from '../components/ConfirmDialog'
+import { useConfirm } from '@shared/components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 import { fmt } from '@shared/lib/format'
 import { startLoading, endLoading } from '@shared/lib/loading'
@@ -22,7 +22,7 @@ import {
   UploadFolderPicked,
   UploadPicked,
 } from '../../wailsjs/go/main/App'
-import ReplaceDialog, { type ConflictEntry } from '../components/ReplaceDialog'
+import ReplaceDialog, { type ConflictEntry } from '@shared/components/ReplaceDialog'
 import PreviewContent, { type PreviewResult } from '@shared/components/PreviewContent'
 import StorageStats from '@shared/components/StorageStats'
 import UploadCard from '@shared/components/UploadCard'

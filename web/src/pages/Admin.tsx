@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, PublicUser } from '../lib/api'
-import { useConfirm } from '../components/ConfirmDialog'
+import { useConfirm } from '@shared/components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
 const GiB = 1024 * 1024 * 1024

@@ -7,10 +7,3 @@ type ProcessingTracker interface {
 	AddProcessing(userID, key string)
 	RemoveProcessing(userID, key string)
 }
-
-// QuotaUpdater allows the compress engine to adjust a user's usedBytes after
-// replacing a file with a smaller recompressed version.
-// *users.Store satisfies this interface via its AddUsedBytes method.
-type QuotaUpdater interface {
-	AddUsedBytes(userID string, delta int64) error
-}
