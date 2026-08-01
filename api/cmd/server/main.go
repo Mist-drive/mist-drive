@@ -156,26 +156,44 @@ func main() {
 	}
 }
 
+// bootstrapAdmin ensures the one admin account (from ADMIN_LOGIN /
+// ADMIN_PASSWORD) exists, creating it on first boot. If it already
+// exists, its password is re-synced to the current ADMIN_PASSWORD on
+// every boot — changing the env var and restarting is always enough,
+// no manual DB edit ever needed. Only actually writes (and bumps
+// TokenVersion, dropping any stale session) when the password differs
+// from what's stored, so a normal restart with an unchanged env var
+// stays a true no-op.
 func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
-	if _, err := s.GetByLogin(cfg.AdminLogin); err == nil {
+	u, err := s.GetByLogin(cfg.AdminLogin)
+	if err != nil {
+		hash, err := auth.HashPassword(cfg.AdminPassword)
+		if err != nil {
+			return err
+		}
+		id := uuid.NewString()
+		u := &users.User{
+			ID: id, Login: cfg.AdminLogin, BcryptPwd: hash,
+			QuotaBytes: cfg.DefaultQuota,
+			Role:       users.RoleAdmin, CreatedAt: time.Now(),
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s3c.EnsureBucket(ctx, u.Bucket()); err != nil {
+			return err
+		}
+		return s.Create(u)
+	}
+	if auth.VerifyPassword(u.BcryptPwd, cfg.AdminPassword) {
 		return nil
 	}
 	hash, err := auth.HashPassword(cfg.AdminPassword)
 	if err != nil {
 		return err
 	}
-	id := uuid.NewString()
-	u := &users.User{
-		ID: id, Login: cfg.AdminLogin, BcryptPwd: hash,
-		QuotaBytes: cfg.DefaultQuota,
-		Role:       users.RoleAdmin, CreatedAt: time.Now(),
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := s3c.EnsureBucket(ctx, u.Bucket()); err != nil {
-		return err
-	}
-	return s.Create(u)
+	u.BcryptPwd = hash
+	u.TokenVersion++
+	return s.Update(u)
 }
 
 func gcStaleUploads(cfg *config.Config, us *uploads.Store, s3c *s3x.Client, appLog *logger.Logger) {
