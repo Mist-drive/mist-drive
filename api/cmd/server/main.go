@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/creativeyann17/go-docstore"
-	"github.com/yann/mist-drive/api/internal/auth"
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/yann/mist-drive/api/internal/compress"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
@@ -167,7 +167,7 @@ func main() {
 func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
 	u, err := s.GetByLogin(cfg.AdminLogin)
 	if err != nil {
-		hash, err := auth.HashPassword(cfg.AdminPassword)
+		hash, err := fiberauth.HashPassword(cfg.AdminPassword)
 		if err != nil {
 			return err
 		}
@@ -184,10 +184,10 @@ func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
 		}
 		return s.Create(u)
 	}
-	if auth.VerifyPassword(u.BcryptPwd, cfg.AdminPassword) {
+	if fiberauth.VerifyPassword(u.BcryptPwd, cfg.AdminPassword) {
 		return nil
 	}
-	hash, err := auth.HashPassword(cfg.AdminPassword)
+	hash, err := fiberauth.HashPassword(cfg.AdminPassword)
 	if err != nil {
 		return err
 	}

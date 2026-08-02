@@ -260,7 +260,7 @@ func (s *Server) downloadZipTicket(c *fiber.Ctx) error {
 		Prefix string `json:"prefix"`
 	}
 	_ = c.BodyParser(&body)
-	ticket, err := s.dlGuard().issue(u.ID, body.Prefix)
+	ticket, err := s.dlGuard().Issue(u.ID, body.Prefix)
 	if err != nil {
 		return s.serverError("files: issue download ticket", err)
 	}
@@ -272,7 +272,7 @@ func (s *Server) downloadZipTicket(c *fiber.Ctx) error {
 // the ticket is the credential. Prefix comes from the ticket, never the
 // query, so a ticket authorizes exactly one download.
 func (s *Server) downloadZipByTicket(c *fiber.Ctx) error {
-	uid, prefix, ok := s.dlGuard().consume(c.Query("ticket"))
+	uid, prefix, ok := s.dlGuard().Consume(c.Query("ticket"))
 	if !ok {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired download ticket")
 	}

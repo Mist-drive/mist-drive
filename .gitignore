@@ -13,3 +13,5 @@ desktop/frontend/package.json.md5
 data
 traefik/certs
 .DS_Store
+api/go.work
+api/go.work.sum

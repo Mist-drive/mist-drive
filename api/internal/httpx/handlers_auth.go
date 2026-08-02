@@ -2,13 +2,12 @@ package httpx
 
 import (
 	"log/slog"
-	"net"
 	"strconv"
 	"strings"
 	"time"
 
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
-	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/users"
 )
@@ -47,12 +46,12 @@ func (s *Server) login(c *fiber.Ctx) error {
 		// Spend a bcrypt comparison on a dummy hash so unknown-user
 		// responses take the same time as wrong-password ones — no
 		// timing oracle for username enumeration.
-		auth.DummyVerify(r.Password)
+		fiberauth.DummyVerify(r.Password)
 		s.loginFail(r.Login, clientIP(c))
 		s.secWarn("auth: unknown user", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 	}
-	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+	if !fiberauth.VerifyPassword(u.BcryptPwd, r.Password) {
 		s.secWarn("auth: wrong password", "ip", clientIP(c), "login", r.Login, "ua", c.Get("User-Agent"))
 		count := s.loginFail(u.Login, clientIP(c))
 		if s.Mailer != nil && s.Mailer.Enabled() && count%3 == 0 {
@@ -73,7 +72,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 	if u.TOTPEnabled {
 		skipTOTP := false
 		if cookie := c.Cookies(deviceCookieName); cookie != "" {
-			if ok, _ := validateDeviceCookie(cookie, u.TrustedDevices); ok {
+			if _, ok := fiberauth.ValidateDeviceCookie(cookie, u.TrustedDevices); ok {
 				skipTOTP = true
 			} else {
 				s.secWarn("auth: invalid device cookie", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
@@ -98,7 +97,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 			}
 		}
 	}
-	newIP := isNewIP(clientIP(c), u.LoginHistory)
+	newIP := fiberauth.IsNewIP(clientIP(c), u.LoginHistory)
 	u.AppendLoginRecord(clientIP(c), c.Get("User-Agent"))
 	_ = s.Users.Update(u)
 	s.loginSucceeded(u.Login)
@@ -114,7 +113,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 		}()
 	}
 
-	tok, err := auth.Issue(s.Cfg.JWTSecret, u.ID, string(u.Role), u.TokenVersion, s.Cfg.JWTTTL)
+	tok, err := fiberauth.Issue(s.Cfg.JWTSecret, u.ID, []string{string(u.Role)}, u.TokenVersion, s.Cfg.JWTTTL)
 	if err != nil {
 		return err
 	}
@@ -144,32 +143,8 @@ func (s *Server) me(c *fiber.Ctx) error {
 	return c.JSON(p)
 }
 
-// clientIP returns the best available client IP.
-// In production clientIP(c) reads X-Forwarded-For (set by Traefik via ProxyHeader config).
-// In local dev that header is absent, so we fall back to the raw TCP remote address.
-func clientIP(c *fiber.Ctx) string {
-	if ip := c.IP(); ip != "" {
-		return ip
-	}
-	if addr := c.Context().RemoteAddr(); addr != nil {
-		if host, _, err := net.SplitHostPort(addr.String()); err == nil && host != "" {
-			return host
-		}
-	}
-	return "unknown"
-}
-
-func isNewIP(ip string, history []users.LoginRecord) bool {
-	if len(history) == 0 {
-		return false
-	}
-	for _, r := range history {
-		if r.IP == ip {
-			return false
-		}
-	}
-	return true
-}
+// clientIP returns the best available client IP (see fiberauth.ClientIP).
+func clientIP(c *fiber.Ctx) string { return fiberauth.ClientIP(c) }
 
 type updateEmailReq struct {
 	Email string `json:"email"`
@@ -212,7 +187,7 @@ func (s *Server) changePassword(c *fiber.Ctx) error {
 	if err := c.BodyParser(&r); err != nil || r.CurrentPassword == "" || r.NewPassword == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
 	}
-	if !auth.VerifyPassword(u.BcryptPwd, r.CurrentPassword) {
+	if !fiberauth.VerifyPassword(u.BcryptPwd, r.CurrentPassword) {
 		s.secWarn("change-password: wrong current password", "ip", clientIP(c), "uid", u.ID)
 		return fiber.NewError(fiber.StatusUnauthorized, "wrong current password")
 	}
@@ -229,7 +204,7 @@ func (s *Server) changePassword(c *fiber.Ctx) error {
 			_ = s.Users.Update(u)
 		}
 	}
-	hash, err := auth.HashPassword(r.NewPassword)
+	hash, err := fiberauth.HashPassword(r.NewPassword)
 	if err != nil {
 		return err
 	}
@@ -265,7 +240,7 @@ func (s *Server) logoutAll(c *fiber.Ctx) error {
 			_ = s.Users.Update(u)
 		}
 	} else {
-		if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+		if !fiberauth.VerifyPassword(u.BcryptPwd, r.Password) {
 			s.secWarn("logout-all: wrong password", "ip", clientIP(c), "uid", u.ID)
 			return fiber.NewError(fiber.StatusUnauthorized, "wrong password")
 		}

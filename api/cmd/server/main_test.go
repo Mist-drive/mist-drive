@@ -6,7 +6,7 @@ import (
 
 	"github.com/creativeyann17/go-docstore"
 
-	"github.com/yann/mist-drive/api/internal/auth"
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/users"
 )
@@ -30,7 +30,7 @@ func newTestUserStore(t *testing.T) *users.Store {
 // the sync/no-op branches, which never touch s3c.
 func seedAdmin(t *testing.T, store *users.Store, login, password string) *users.User {
 	t.Helper()
-	hash, err := auth.HashPassword(password)
+	hash, err := fiberauth.HashPassword(password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -55,10 +55,10 @@ func TestBootstrapAdminSyncsPasswordWhenChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByLogin: %v", err)
 	}
-	if !auth.VerifyPassword(after.BcryptPwd, "secondpass2") {
+	if !fiberauth.VerifyPassword(after.BcryptPwd, "secondpass2") {
 		t.Fatal("password must match the new ADMIN_PASSWORD after sync")
 	}
-	if auth.VerifyPassword(after.BcryptPwd, "firstpass1") {
+	if fiberauth.VerifyPassword(after.BcryptPwd, "firstpass1") {
 		t.Fatal("old password must no longer verify")
 	}
 	if after.TokenVersion <= before.TokenVersion {

@@ -1,8 +1,9 @@
 package users
 
 import (
-	"strings"
 	"time"
+
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 )
 
 type Role string
@@ -14,19 +15,12 @@ const (
 
 const loginHistoryMax = 10
 
-type LoginRecord struct {
-	IP        string    `json:"ip"`
-	UserAgent string    `json:"userAgent,omitempty"`
-	At        time.Time `json:"at"`
-}
+// Aliases to the shared lib types: field- and JSON-identical to the
+// structs that used to live here, so stored user records need no
+// migration.
+type LoginRecord = fiberauth.LoginRecord
 
-type TrustedDevice struct {
-	ID          string    `json:"id"`
-	HashedToken string    `json:"hashedToken"`
-	Label       string    `json:"label"`
-	CreatedAt   time.Time `json:"createdAt"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-}
+type TrustedDevice = fiberauth.TrustedDevice
 
 type PublicDevice struct {
 	ID        string    `json:"id"`
@@ -53,17 +47,7 @@ type User struct {
 }
 
 func (u *User) AppendLoginRecord(ip, ua string) {
-	ip = strings.Clone(ip)
-	if runes := []rune(ua); len(runes) > 120 {
-		ua = string(runes[:120])
-	} else {
-		ua = strings.Clone(ua)
-	}
-	r := LoginRecord{IP: ip, UserAgent: ua, At: time.Now()}
-	u.LoginHistory = append([]LoginRecord{r}, u.LoginHistory...)
-	if len(u.LoginHistory) > loginHistoryMax {
-		u.LoginHistory = u.LoginHistory[:loginHistoryMax]
-	}
+	u.LoginHistory = fiberauth.AppendLoginRecord(u.LoginHistory, ip, ua, loginHistoryMax)
 }
 
 func (u *User) PublicDevices() []PublicDevice {

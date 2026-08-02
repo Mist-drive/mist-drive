@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 	"github.com/yann/mist-drive/api/internal/compress"
@@ -44,9 +45,9 @@ type Server struct {
 	Features      features.Features
 	Mailer        *notify.Mailer
 	CompressQueue *compress.Queue
-	throttle      *loginThrottle
+	throttle      *fiberauth.LoginThrottle
 	throttleOnce  sync.Once
-	dlTickets     *downloadTickets
+	dlTickets     *fiberauth.TicketStore
 	dlOnce        sync.Once
 	bootTime      time.Time // tokens issued before this are rejected (set in Register)
 	procMu        sync.RWMutex
@@ -56,10 +57,10 @@ type Server struct {
 // loginGuard lazily builds the login throttle. Lazy so a bare
 // Server{} (constructed directly in some unit tests) still works
 // without an explicit init step.
-func (s *Server) loginGuard() *loginThrottle {
+func (s *Server) loginGuard() *fiberauth.LoginThrottle {
 	s.throttleOnce.Do(func() {
 		if s.throttle == nil {
-			s.throttle = newLoginThrottle()
+			s.throttle = fiberauth.NewLoginThrottle(fiberauth.LoginThrottleConfig{})
 		}
 	})
 	return s.throttle
@@ -67,13 +68,27 @@ func (s *Server) loginGuard() *loginThrottle {
 
 // dlGuard lazily builds the download-ticket store. Same lazy-init
 // rationale as loginGuard.
-func (s *Server) dlGuard() *downloadTickets {
+func (s *Server) dlGuard() *fiberauth.TicketStore {
 	s.dlOnce.Do(func() {
 		if s.dlTickets == nil {
-			s.dlTickets = newDownloadTickets()
+			s.dlTickets = fiberauth.NewTicketStore(60 * time.Second)
 		}
 	})
 	return s.dlTickets
+}
+
+// loginLocked/loginFail/loginSucceeded keep the pre-migration call shape
+// used across handlers_auth.go.
+func (s *Server) loginLocked(login, ip string) (bool, time.Duration) {
+	return s.loginGuard().Locked(login, ip)
+}
+
+func (s *Server) loginFail(login, ip string) int {
+	return s.loginGuard().Fail(login, ip)
+}
+
+func (s *Server) loginSucceeded(login string) {
+	s.loginGuard().Succeeded(login)
 }
 
 // secWarn emits a structured WARN security event. No-ops when Log is nil

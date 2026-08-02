@@ -32,7 +32,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/creativeyann17/go-docstore"
-	"github.com/yann/mist-drive/api/internal/auth"
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
 	"github.com/yann/mist-drive/api/internal/httpx"
@@ -127,7 +127,7 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 		t.Fatal(err)
 	}
 
-	hash, _ := auth.HashPassword("pw")
+	hash, _ := fiberauth.HashPassword("pw")
 	u := &users.User{
 		ID:         uuid.NewString(),
 		Login:      "alice",
@@ -154,7 +154,7 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	srv.Register(app)
 
-	tok, err := auth.Issue(cfg.JWTSecret, u.ID, string(u.Role), 0, cfg.JWTTTL)
+	tok, err := fiberauth.Issue(cfg.JWTSecret, u.ID, []string{string(u.Role)}, 0, cfg.JWTTTL)
 	if err != nil {
 		t.Fatal(err)
 	}

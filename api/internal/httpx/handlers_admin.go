@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/users"
 )
 
@@ -72,7 +72,7 @@ func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 	if r.QuotaBytes <= 0 {
 		r.QuotaBytes = s.Cfg.DefaultQuota
 	}
-	hash, err := auth.HashPassword(r.Password)
+	hash, err := fiberauth.HashPassword(r.Password)
 	if err != nil {
 		return err
 	}

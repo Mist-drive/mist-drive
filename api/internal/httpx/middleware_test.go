@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
-	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/httpx"
 )
 
@@ -31,9 +31,9 @@ func newMiddlewareAppWithBoot(secret string, bootTime time.Time) *fiber.App {
 
 func issueToken(t *testing.T, secret, uid, role string) string {
 	t.Helper()
-	tok, err := auth.Issue(secret, uid, role, 0, time.Hour)
+	tok, err := fiberauth.Issue(secret, uid, []string{role}, 0, time.Hour)
 	if err != nil {
-		t.Fatalf("auth.Issue: %v", err)
+		t.Fatalf("fiberauth.Issue: %v", err)
 	}
 	return tok
 }

@@ -4,7 +4,7 @@ VERSION ?= dev
 # make appimage LDFLAGS="-s -w -X main.version=1.2.3 -X main.commit=abc1234").
 LDFLAGS ?= -X main.version=$(VERSION)
 
-.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build appimage db-web run stop test test-unit test-integration clean
+.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build appimage db-web run stop test test-unit test-integration fmt check install-hooks clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -95,6 +95,18 @@ test-integration: ## run api integration tests (requires docker)
 
 stop: ## stop all docker compose services
 	docker compose down
+
+fmt: ## gofmt the api module
+	cd api && gofmt -w .
+
+check: ## gofmt check + go vet + race tests on the api module (pre-commit gate)
+	@fmtout=$$(cd api && gofmt -l .); if [ -n "$$fmtout" ]; then echo "✗ needs gofmt:"; echo "$$fmtout"; exit 1; fi
+	cd api && go vet ./...
+	cd api && go test -race ./... -count=1
+
+install-hooks: ## install the pre-commit hook (fmt + check on api before every commit)
+	cp hooks/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
 
 clean: ## remove build artifacts and dependencies
 	rm -rf api/bin api/tmp web/dist web/node_modules shared/node_modules desktop/build/bin desktop/frontend/dist desktop/frontend/node_modules

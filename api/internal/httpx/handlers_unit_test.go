@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/creativeyann17/go-docstore"
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/quota"
@@ -55,7 +55,7 @@ func newUnitFixture(t *testing.T) *unitFixture {
 		t.Fatalf("uploads.NewStore: %v", err)
 	}
 
-	hash, err := auth.HashPassword("pw")
+	hash, err := fiberauth.HashPassword("pw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func newUnitFixture(t *testing.T) *unitFixture {
 		t.Fatal(err)
 	}
 
-	adminHash, err := auth.HashPassword("adminpw")
+	adminHash, err := fiberauth.HashPassword("adminpw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +98,11 @@ func newUnitFixture(t *testing.T) *unitFixture {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	srv.Register(app)
 
-	userTok, err := auth.Issue(unitSecret, alice.ID, string(alice.Role), 0, time.Hour)
+	userTok, err := fiberauth.Issue(unitSecret, alice.ID, []string{string(alice.Role)}, 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminTok, err := auth.Issue(unitSecret, adminID, string(users.RoleAdmin), 0, time.Hour)
+	adminTok, err := fiberauth.Issue(unitSecret, adminID, []string{string(users.RoleAdmin)}, 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestLogin_VersionMismatch(t *testing.T) {
 	ds2, _ := docstore.Open(filepath.Join(dataDir, "mist.db"))
 	t.Cleanup(func() { ds2.Close() })
 	uStore, _ := users.NewStore(ds2, dataDir)
-	hash, _ := auth.HashPassword("pw")
+	hash, _ := fiberauth.HashPassword("pw")
 	_ = uStore.Create(&users.User{
 		ID: uuid.NewString(), Login: "bob", BcryptPwd: hash,
 		QuotaBytes: 10 << 30, Role: users.RoleUser, CreatedAt: time.Now(),

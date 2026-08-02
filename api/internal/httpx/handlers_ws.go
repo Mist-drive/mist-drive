@@ -3,8 +3,8 @@ package httpx
 import (
 	"time"
 
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/websocket/v2"
-	"github.com/yann/mist-drive/api/internal/auth"
 )
 
 // wsAuthTimeout bounds how long we wait for the client's first-message
@@ -54,8 +54,9 @@ func (s *Server) wsHandler(c *websocket.Conn) {
 }
 
 // authenticateWS reads and validates the first-message auth frame. It
-// mirrors AuthMiddleware: signature + algorithm (via auth.Parse), the
-// boot-time issued-at check, and the token-version revocation check.
+// mirrors AuthMiddleware: signature + algorithm (via fiberauth.Parse),
+// the purpose-token rejection, the boot-time issued-at check, and the
+// token-version revocation check.
 // Returns the authenticated uid, or ok=false (caller closes the socket).
 func (s *Server) authenticateWS(c *websocket.Conn) (uid string, ok bool) {
 	_ = c.SetReadDeadline(time.Now().Add(wsAuthTimeout))
@@ -66,8 +67,8 @@ func (s *Server) authenticateWS(c *websocket.Conn) (uid string, ok bool) {
 	if err := c.ReadJSON(&msg); err != nil || msg.Type != "auth" || msg.Token == "" {
 		return "", false
 	}
-	claims, err := auth.Parse(s.Cfg.JWTSecret, msg.Token)
-	if err != nil {
+	claims, err := fiberauth.Parse(s.Cfg.JWTSecret, msg.Token)
+	if err != nil || claims.Purpose != "" {
 		return "", false
 	}
 	if claims.IssuedAt == nil || claims.IssuedAt.Time.Before(s.bootTime) {

@@ -1,14 +1,9 @@
 package httpx
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-
+	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
-	"github.com/pquerna/otp/totp"
-	"github.com/yann/mist-drive/api/internal/auth"
 	"github.com/yann/mist-drive/api/internal/users"
-	"golang.org/x/crypto/bcrypt"
 )
 
 const backupCodeCount = 8
@@ -17,34 +12,14 @@ const backupCodeCount = 8
 // Returns (valid, backupConsumed). When backupConsumed is true the caller must
 // persist u so the used code is removed from the stored slice.
 func verifyTOTP(u *users.User, code string) (ok bool, backupConsumed bool) {
-	if totp.Validate(code, u.TOTPSecret) {
+	if fiberauth.ValidateTOTPCode(u.TOTPSecret, code) {
 		return true, false
 	}
-	for i, hashed := range u.TOTPBackupCodes {
-		if bcrypt.CompareHashAndPassword([]byte(hashed), []byte(code)) == nil {
-			u.TOTPBackupCodes = append(u.TOTPBackupCodes[:i], u.TOTPBackupCodes[i+1:]...)
-			return true, true
-		}
+	if i, ok := fiberauth.CheckBackupCode(u.TOTPBackupCodes, code); ok {
+		u.TOTPBackupCodes = append(u.TOTPBackupCodes[:i], u.TOTPBackupCodes[i+1:]...)
+		return true, true
 	}
 	return false, false
-}
-
-func generateBackupCodes() (plain []string, hashed []string, err error) {
-	for range backupCodeCount {
-		b := make([]byte, 5)
-		if _, err = rand.Read(b); err != nil {
-			return
-		}
-		code := hex.EncodeToString(b) // 10 hex chars
-		h, e := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
-		if e != nil {
-			err = e
-			return
-		}
-		plain = append(plain, code)
-		hashed = append(hashed, string(h))
-	}
-	return
 }
 
 // GET /api/totp/setup — generate a new secret + QR URI without saving.
@@ -57,16 +32,13 @@ func (s *Server) totpSetup(c *fiber.Ctx) error {
 	if s.Version == "dev" {
 		issuer += " (dev)"
 	}
-	key, err := totp.Generate(totp.GenerateOpts{
-		Issuer:      issuer,
-		AccountName: u.Login,
-	})
+	secret, uri, err := fiberauth.GenerateTOTPSecret(fiberauth.TOTPConfig{Issuer: issuer}, u.Login)
 	if err != nil {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"secret": key.Secret(),
-		"uri":    key.URL(),
+		"secret": secret,
+		"uri":    uri,
 	})
 }
 
@@ -91,14 +63,14 @@ func (s *Server) totpEnable(c *fiber.Ctx) error {
 	}
 	// Re-authenticate with the password so a leaked/stolen session token
 	// alone can't enrol an attacker-controlled 2FA secret (account lockout).
-	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+	if !fiberauth.VerifyPassword(u.BcryptPwd, r.Password) {
 		s.secWarn("totp: wrong password on enable", "ip", clientIP(c), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid password")
 	}
-	if !totp.Validate(r.Code, r.Secret) {
+	if !fiberauth.ValidateTOTPCode(r.Secret, r.Code) {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
 	}
-	plain, hashed, err := generateBackupCodes()
+	plain, hashed, err := fiberauth.GenerateBackupCodes(backupCodeCount)
 	if err != nil {
 		return err
 	}
@@ -126,7 +98,7 @@ func (s *Server) totpDisable(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "user gone")
 	}
-	if !auth.VerifyPassword(u.BcryptPwd, r.Password) {
+	if !fiberauth.VerifyPassword(u.BcryptPwd, r.Password) {
 		s.secWarn("totp: wrong password on disable", "ip", c.IP(), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid password")
 	}
@@ -162,11 +134,11 @@ func (s *Server) totpRegenBackup(c *fiber.Ctx) error {
 	if !u.TOTPEnabled {
 		return fiber.NewError(fiber.StatusBadRequest, "TOTP not enabled")
 	}
-	if !totp.Validate(r.Code, u.TOTPSecret) {
+	if !fiberauth.ValidateTOTPCode(u.TOTPSecret, r.Code) {
 		s.secWarn("totp: invalid code on regen-backup", "ip", c.IP(), "uid", u.ID, "login", u.Login, "ua", c.Get("User-Agent"))
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid TOTP code")
 	}
-	plain, hashed, err := generateBackupCodes()
+	plain, hashed, err := fiberauth.GenerateBackupCodes(backupCodeCount)
 	if err != nil {
 		return err
 	}

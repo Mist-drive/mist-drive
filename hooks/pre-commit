@@ -1,0 +1,13 @@
+#!/bin/sh
+# Format + vet + race tests (api module) before every commit — install with `make install-hooks`.
+make fmt
+git add -u
+
+echo "Running go vet + race tests..."
+if ! make check; then
+    echo ""
+    echo "✗ Check failed. Fix issues above before committing."
+    exit 1
+fi
+
+exit 0
