@@ -14,5 +14,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: api/go.mod
-      - name: Tests
-        run: make test
+      - name: Check (fmt + vet + race)
+        run: make check
+      - name: Integration tests
+        run: cd api && go test -tags=integration -timeout=300s ./...

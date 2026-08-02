@@ -1,12 +1,15 @@
 #!/bin/sh
-# Format + vet + race tests (api module) before every commit — install with `make install-hooks`.
+# Format + vet + tests (unit, no race) before every commit — the full
+# race-detector check + integration tests run in CI, not here (race
+# tests are slow, not worth the wait on every commit). Install with
+# `make install-hooks`.
 make fmt
 git add -u
 
-echo "Running go vet + race tests..."
-if ! make check; then
+echo "Running go vet + tests..."
+if ! (cd api && go vet ./... && go test ./... -count=1); then
     echo ""
-    echo "✗ Check failed. Fix issues above before committing."
+    echo "✗ Checks failed. Fix issues above before committing."
     exit 1
 fi
 
