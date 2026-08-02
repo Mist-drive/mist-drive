@@ -12,6 +12,7 @@ help:
 install: ## install deps for api + web + desktop
 	go install github.com/wailsapp/wails/v2/cmd/wails@latest
 	go install github.com/air-verse/air@latest
+	go install github.com/creativeyann17/go-docstore/cmd/godocstore@latest
 	cd api && go mod download
 	cd web && bun install
 	cd desktop && go mod download && cd frontend && bun install
@@ -35,7 +36,7 @@ dev-api: install-data ## run api with air hot-reload (starts minio via docker co
 	@grep -q "^SMTP_TLS=" api/.env || echo "SMTP_TLS=none" >> api/.env
 	@grep -q "^SMTP_FROM=" api/.env || echo "SMTP_FROM=noreply@mist-drive.local" >> api/.env
 	@grep -q "^PUBLIC_URL=" api/.env || echo "PUBLIC_URL=http://localhost:3000" >> api/.env
-	docker compose up -d --wait minio mailpit sqlite-web
+	docker compose up -d --wait minio mailpit
 	@# Reap any orphaned hot-reload child from a previous session: when
 	@# air dies hard, its compiled api/tmp/api keeps port 3000 forever
 	@# (found one 5 days old). pkill matches the binary path, not "air".
@@ -48,13 +49,13 @@ dev-ui: ## run web vite dev server
 dev-desktop: ## run the wails desktop app in dev mode (webkit2_41 tag is required on Ubuntu 24.04+)
 	cd desktop && wails dev -tags webkit2_41
 
-# Browse/edit the dev database (data/api/mist.db) in a web UI at
-# http://localhost:8081 — the JSON-files-were-inspectable workflow,
-# SQLite edition. Safe alongside a running dev-api (WAL + busy_timeout);
-# keep doc columns valid JSON when editing.
-db-web: ## open sqlite-web on the dev mist.db (http://localhost:8081)
-	docker compose up -d sqlite-web
-	@echo "sqlite-web: http://localhost:8081"
+# Browse/edit the dev database (data/api/mist.db) with the godocstore
+# CLI's own web UI at http://localhost:8391 — JSON-first, doesn't
+# truncate the doc columns like a generic SQL browser would. Safe
+# alongside a running dev-api (WAL + busy_timeout). Loopback-only, no
+# auth, requires `make install`.
+db-web: ## open godocstore serve on the dev mist.db (http://localhost:8391)
+	godocstore serve --db data/api/mist.db
 
 desktop-build: ## build the wails desktop binary
 	cd desktop && wails build -tags webkit2_41 -ldflags "-X main.version=$(VERSION)"
