@@ -41,7 +41,8 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "no user")
 	}
 	var r initReq
-	if err := c.BodyParser(&r); err != nil || r.Key == "" || r.Size <= 0 {
+	// Size 0 is valid: an empty file still uploads as one empty part.
+	if err := c.BodyParser(&r); err != nil || r.Key == "" || r.Size < 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "bad body")
 	}
 	r.Key = strings.TrimPrefix(strings.TrimSpace(r.Key), "/")

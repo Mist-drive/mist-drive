@@ -234,7 +234,8 @@ func (c *Client) InitMultipart(ctx context.Context, bucket, key string, size, pa
 	if err != nil {
 		return "", nil, err
 	}
-	n := (size + partSize - 1) / partSize
+	// At least one part: an empty file completes with a single empty part.
+	n := max(1, (size+partSize-1)/partSize)
 	urls := make([]PartURL, 0, n)
 	for i := int64(1); i <= n; i++ {
 		u, err := c.presignPartURL(ctx, bucket, key, uploadID, int(i), ttl)

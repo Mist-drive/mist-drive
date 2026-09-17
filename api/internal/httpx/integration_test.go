@@ -911,3 +911,50 @@ func TestIntegration_ListFilesConditionalAndCache(t *testing.T) {
 		t.Fatalf("processing added: want 200, got %d", r.StatusCode)
 	}
 }
+
+func TestIntegration_UploadEmptyFile(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	resp := f.do(t, "POST", "/api/files/upload/init", map[string]any{
+		"key": "empty.txt", "size": 0, "partSize": 8 << 20,
+	})
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("init empty file: status=%d body=%s", resp.StatusCode, b)
+	}
+	var ir struct {
+		UploadID string `json:"uploadId"`
+		URLs     []struct {
+			PartNumber int    `json:"partNumber"`
+			URL        string `json:"url"`
+		} `json:"urls"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
+		t.Fatal(err)
+	}
+	// Clients loop over URLs: an empty file must still get one (empty) part.
+	if len(ir.URLs) != 1 {
+		t.Fatalf("want 1 part for an empty file, got %d", len(ir.URLs))
+	}
+	req, _ := http.NewRequest("PUT", ir.URLs[0].URL, bytes.NewReader(nil))
+	req.ContentLength = 0
+	r, err := http.DefaultClient.Do(req)
+	if err != nil || r.StatusCode != 200 {
+		t.Fatalf("PUT empty part: %v status=%v", err, r)
+	}
+	cResp := f.do(t, "POST", "/api/files/upload/complete", map[string]any{
+		"uploadId": ir.UploadID,
+		"parts":    []map[string]any{{"partNumber": 1, "etag": r.Header.Get("ETag")}},
+	})
+	if cResp.StatusCode != 200 {
+		b, _ := io.ReadAll(cResp.Body)
+		t.Fatalf("complete empty file: status=%d body=%s", cResp.StatusCode, b)
+	}
+	size, err := f.s3c.StatObject(context.Background(), f.user.Bucket(), "empty.txt")
+	if err != nil || size != 0 {
+		t.Fatalf("empty object: size=%d err=%v", size, err)
+	}
+
+	if r := f.do(t, "POST", "/api/files/upload/init", map[string]any{"key": "neg.txt", "size": -1}); r.StatusCode != 400 {
+		t.Fatalf("negative size: want 400, got %d", r.StatusCode)
+	}
+}

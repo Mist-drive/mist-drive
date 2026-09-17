@@ -748,6 +748,12 @@ func (c *Client) putPart(ctx context.Context, url string, body io.Reader, size i
 		return "", err
 	}
 	req.ContentLength = size
+	if size == 0 {
+		// Go treats a non-nil body with length 0 as unknown and sends it
+		// chunked, which presigned S3 PUTs reject (411): send an explicit
+		// empty body so the request carries Content-Length: 0.
+		req.Body = http.NoBody
+	}
 	res, err := c.http.Do(req)
 	if err != nil {
 		return "", err
