@@ -104,3 +104,21 @@ func TestHubCoalescesBurst(t *testing.T) {
 	case <-time.After(2 * CoalesceWindow):
 	}
 }
+
+func TestHubVersionBumpsBeforeDebounce(t *testing.T) {
+	prev := CoalesceWindow
+	CoalesceWindow = time.Hour // fan-out never fires during the test
+	defer func() { CoalesceWindow = prev }()
+	h := NewHub()
+	if v := h.Version("u1"); v != 0 {
+		t.Fatalf("fresh version: %d", v)
+	}
+	h.Publish("u1", Event{Type: FilesChanged})
+	h.Publish("u1", Event{Type: FilesChanged})
+	if v := h.Version("u1"); v != 2 {
+		t.Fatalf("version must bump on every Publish, even coalesced: got %d", v)
+	}
+	if v := h.Version("u2"); v != 0 {
+		t.Fatalf("other user's version changed: %d", v)
+	}
+}

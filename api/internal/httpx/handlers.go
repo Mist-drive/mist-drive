@@ -53,6 +53,7 @@ type Server struct {
 	dlTickets     *fiberauth.TicketStore
 	dlOnce        sync.Once
 	bootTime      time.Time // tokens issued before this are rejected (set in Register)
+	lists         listCache // whole-bucket listings, see listRoot
 	procMu        sync.RWMutex
 	processing    map[string]map[string]bool // userID → processing path prefixes
 }

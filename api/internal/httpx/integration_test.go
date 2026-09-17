@@ -848,3 +848,66 @@ func TestIntegration_RenamePathTraversalRejected(t *testing.T) {
 		t.Fatalf("want 400 for path traversal, got %d body=%s", resp.StatusCode, b)
 	}
 }
+
+func TestIntegration_ListFilesConditionalAndCache(t *testing.T) {
+	f := newFixture(t, 50<<20)
+	get := func(etag string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("GET", "/api/files?prefix=", nil)
+		req.Header.Set("Authorization", "Bearer "+f.token)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		resp, err := f.app.Test(req, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	first := get("")
+	etag := first.Header.Get("ETag")
+	if first.StatusCode != 200 || etag == "" || first.Header.Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("first list: status=%d etag=%q cc=%q", first.StatusCode, etag, first.Header.Get("Cache-Control"))
+	}
+	if r := get(etag); r.StatusCode != 304 {
+		t.Fatalf("unchanged bucket: want 304, got %d", r.StatusCode)
+	}
+	if r := get(`W/` + etag); r.StatusCode != 304 {
+		t.Fatalf("weak etag: want 304, got %d", r.StatusCode)
+	}
+	if r := get(""); r.StatusCode != 200 || r.Header.Get("ETag") != etag {
+		t.Fatalf("no If-None-Match: want 200 from cache with same etag, got %d %q", r.StatusCode, r.Header.Get("ETag"))
+	}
+
+	// A mutation through the API invalidates immediately (before the WS debounce).
+	if r := f.do(t, "POST", "/api/files/mkdir", map[string]any{"path": "photos"}); r.StatusCode != 200 {
+		t.Fatalf("mkdir: %d", r.StatusCode)
+	}
+	after := get(etag)
+	if after.StatusCode != 200 || after.Header.Get("ETag") == etag {
+		t.Fatalf("after mkdir: want 200 with new etag, got %d %q", after.StatusCode, after.Header.Get("ETag"))
+	}
+	var out struct {
+		Objects []struct {
+			Key string `json:"key"`
+		} `json:"objects"`
+	}
+	if err := json.NewDecoder(after.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, o := range out.Objects {
+		found = found || o.Key == "photos/.keep"
+	}
+	if !found {
+		t.Fatalf("stale listing served after mkdir: %+v", out.Objects)
+	}
+
+	// Processing markers are part of the tag.
+	etag = after.Header.Get("ETag")
+	f.srv.AddProcessing(f.user.ID, "photos")
+	if r := get(etag); r.StatusCode != 200 {
+		t.Fatalf("processing added: want 200, got %d", r.StatusCode)
+	}
+}

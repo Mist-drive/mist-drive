@@ -105,6 +105,9 @@ func (s *Server) listFiles(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "no user")
 	}
 	prefix := c.Query("prefix", "")
+	if prefix == "" && s.Events != nil {
+		return s.listRoot(c, u.ID, u.Bucket())
+	}
 	objs, err := s.S3.ListObjects(c.Context(), u.Bucket(), prefix)
 	if err != nil {
 		return s.serverError("files: list objects", err)

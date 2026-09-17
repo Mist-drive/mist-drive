@@ -42,9 +42,10 @@ type Event struct {
 }
 
 type Hub struct {
-	mu      sync.Mutex
-	subs    map[string]map[chan Event]struct{} // userID → set of channels
-	pending map[string]*pendingPublish         // userID → trailing-debounce timer
+	mu       sync.Mutex
+	subs     map[string]map[chan Event]struct{} // userID → set of channels
+	pending  map[string]*pendingPublish         // userID → trailing-debounce timer
+	versions map[string]uint64                  // userID → change counter, see Version
 }
 
 type pendingPublish struct {
@@ -54,8 +55,9 @@ type pendingPublish struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		subs:    map[string]map[chan Event]struct{}{},
-		pending: map[string]*pendingPublish{},
+		subs:     map[string]map[chan Event]struct{}{},
+		pending:  map[string]*pendingPublish{},
+		versions: map[string]uint64{},
 	}
 }
 
@@ -93,11 +95,15 @@ func (h *Hub) Subscribe(userID string) (<-chan Event, func()) {
 //
 // When CoalesceWindow is 0 (tests), Publish delivers synchronously.
 func (h *Hub) Publish(userID string, e Event) {
+	h.mu.Lock()
+	// Bumped now, not after the debounce: a list request right after a
+	// change must already miss the cached listing.
+	h.versions[userID]++
 	if CoalesceWindow <= 0 {
+		h.mu.Unlock()
 		h.fanOut(userID, e)
 		return
 	}
-	h.mu.Lock()
 	if p, ok := h.pending[userID]; ok {
 		p.last = e
 		h.mu.Unlock()
@@ -113,6 +119,15 @@ func (h *Hub) Publish(userID string, e Event) {
 	})
 	h.pending[userID] = p
 	h.mu.Unlock()
+}
+
+// Version returns userID's change counter. Every mutation publishes
+// through the hub, so an unchanged version means an unchanged bucket
+// (as far as this process knows).
+func (h *Hub) Version(userID string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.versions[userID]
 }
 
 // fanOut delivers e to every current subscriber of userID. Non-blocking:

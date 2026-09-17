@@ -42,6 +42,10 @@ type Client struct {
 	// across the process stays under the cap. nil = unlimited.
 	uploadLimiter *rate.Limiter
 	deviceCookie  string // trusted-device cookie value (mist_device)
+	// listMu guards the last /api/files response, replayed on 304.
+	listMu   sync.Mutex
+	listETag string
+	lastList ListResponse
 }
 
 func (c *Client) SetDeviceCookie(cookie string) { c.deviceCookie = cookie }
@@ -420,11 +424,43 @@ type ListResponse struct {
 	Processing []string     `json:"processing"`
 }
 
+// ListFiles returns the whole bucket listing. It revalidates with
+// If-None-Match (like a browser cache): an unchanged bucket costs a
+// body-less 304 and replays the last response. The returned slices are
+// shared with that cache, callers must not modify them.
 func (c *Client) ListFiles() (ListResponse, error) {
-	var out ListResponse
-	if err := c.do("GET", "/api/files?prefix=", nil, &out); err != nil {
+	c.listMu.Lock()
+	etag, cached := c.listETag, c.lastList
+	c.listMu.Unlock()
+
+	res, err := c.send(func() (*http.Request, error) {
+		req, err := http.NewRequest("GET", c.baseURL+"/api/files?prefix=", nil)
+		if err != nil {
+			return nil, err
+		}
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		return req, nil
+	})
+	if err != nil {
 		return ListResponse{}, err
 	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotModified && etag != "" {
+		return cached, nil
+	}
+	if res.StatusCode >= 400 {
+		msg, _ := io.ReadAll(res.Body)
+		return ListResponse{}, fmt.Errorf("%d: %s", res.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var out ListResponse
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return ListResponse{}, fmt.Errorf("decode file list: %w", err)
+	}
+	c.listMu.Lock()
+	c.listETag, c.lastList = res.Header.Get("ETag"), out
+	c.listMu.Unlock()
 	return out, nil
 }
 
