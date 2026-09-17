@@ -85,6 +85,8 @@ services:
 
       # --- JWT ---
       JWT_TTL: ${JWT_TTL:-24h}
+      ACCESS_TTL: ${ACCESS_TTL:-15m}
+      REFRESH_TTL: ${REFRESH_TTL:-720h}
 
       # --- Logging ---
       LOG_LEVEL: ${LOG_LEVEL:-info}

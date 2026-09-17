@@ -11,6 +11,8 @@ type Config struct {
 	Port                string
 	JWTSecret           string
 	JWTTTL              time.Duration
+	RefreshTTL          time.Duration // 0 disables refresh sessions
+	AccessTTL           time.Duration // access token TTL when a refresh session backs it
 	AdminLogin          string
 	AdminPassword       string
 	DataDir             string
@@ -54,6 +56,8 @@ func Load() *Config {
 		Port:                env("PORT", "3000"),
 		JWTSecret:           secret,
 		JWTTTL:              duration("JWT_TTL", 24*time.Hour),
+		RefreshTTL:          duration("REFRESH_TTL", 30*24*time.Hour),
+		AccessTTL:           duration("ACCESS_TTL", 15*time.Minute),
 		AdminLogin:          env("ADMIN_LOGIN", "admin"),
 		AdminPassword:       must("ADMIN_PASSWORD"),
 		DataDir:             env("DATA_DIR", "./data"),

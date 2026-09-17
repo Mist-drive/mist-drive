@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,9 +28,15 @@ import (
 
 type Client struct {
 	baseURL string
-	token   string
 	version string
-	http    *http.Client
+	// mu guards token and refreshCookie: the sync engine calls in from
+	// several goroutines. refreshMu single-flights refresh.
+	mu            sync.Mutex
+	refreshMu     sync.Mutex
+	token         string
+	refreshCookie string                            // mist_rt value, "" = no refresh session
+	onRefresh     func(token, refreshCookie string) // persists rotated tokens
+	http          *http.Client
 	// Optional outbound byte-rate limiter applied to every multipart
 	// part PUT. Shared across all concurrent parts so the total throughput
 	// across the process stays under the cap. nil = unlimited.
@@ -38,6 +45,22 @@ type Client struct {
 }
 
 func (c *Client) SetDeviceCookie(cookie string) { c.deviceCookie = cookie }
+
+// SetRefresh enables transparent refresh on 401. onRefresh receives the
+// new access token and the (possibly rotated) refresh cookie to persist.
+func (c *Client) SetRefresh(refreshCookie string, onRefresh func(token, refreshCookie string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshCookie = refreshCookie
+	c.onRefresh = onRefresh
+}
+
+// Token returns the current access token.
+func (c *Client) Token() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token
+}
 
 // SetUploadRateKBps installs / replaces the shared upload rate limiter.
 // Pass 0 to disable (unlimited).
@@ -125,23 +148,24 @@ type loginReq struct {
 	ClientVersion  string `json:"clientVersion,omitempty"`
 	TotpCode       string `json:"totpCode,omitempty"`
 	RememberDevice bool   `json:"rememberDevice,omitempty"`
+	Refresh        bool   `json:"refresh,omitempty"`
 }
 
 // LoginResult is the union returned by Login.
 // When TotpRequired is true, the other fields are zero — caller must re-call with a code.
 type LoginResult struct {
-	TotpRequired bool       `json:"totp_required,omitempty"`
-	Token        string     `json:"token,omitempty"`
-	User         PublicUser `json:"user"`
-	DeviceCookie string     `json:"-"` // extracted from Set-Cookie, not in body
+	TotpRequired  bool       `json:"totp_required,omitempty"`
+	Token         string     `json:"token,omitempty"`
+	User          PublicUser `json:"user"`
+	DeviceCookie  string     `json:"-"` // extracted from Set-Cookie, not in body
+	RefreshCookie string     `json:"-"` // mist_rt, extracted from Set-Cookie
 }
 
-// New builds a client against the given base URL. `insecureTLS` lets
-// the user opt in to self-signed certs — required during local dev
-// because the HTTPS enforcement of the original plan was relaxed.
-func New(baseURL, token, version string, insecureTLS bool) *Client {
+// New builds a client against the given base URL. Certificates are
+// verified except on loopback hosts (local self-signed dev certs).
+func New(baseURL, token, version string) *Client {
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: IsLoopbackURL(baseURL)},
 	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -151,32 +175,136 @@ func New(baseURL, token, version string, insecureTLS bool) *Client {
 	}
 }
 
-func (c *Client) SetToken(t string) { c.token = t }
-
-func (c *Client) do(method, path string, body any, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, c.baseURL+path, rdr)
+// IsLoopbackURL reports whether rawURL targets this machine (localhost,
+// *.localhost or a loopback IP), the only case where skipping TLS
+// verification can't be abused by a network attacker.
+func IsLoopbackURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return err
+		return false
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
 	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (c *Client) SetToken(t string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = t
+}
+
+// send runs an authenticated request made by build (called again for
+// the retry, so bodies must be rebuildable). On 401 it refreshes the
+// session once and retries.
+func (c *Client) send(build func() (*http.Request, error)) (*http.Response, error) {
+	res, tok, err := c.sendOnce(build)
+	if err != nil || res.StatusCode != http.StatusUnauthorized || !c.refresh(tok) {
+		return res, err
+	}
+	res.Body.Close()
+	res, _, err = c.sendOnce(build)
+	return res, err
+}
+
+func (c *Client) sendOnce(build func() (*http.Request, error)) (*http.Response, string, error) {
+	req, err := build()
+	if err != nil {
+		return nil, "", fmt.Errorf("build request: %w", err)
+	}
+	tok := c.Token()
 	req.Header.Set("X-Client", "desktop")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if c.deviceCookie != "" {
-		req.Header.Set("Cookie", "mist_device="+c.deviceCookie)
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	res, err := c.http.Do(req)
+	return res, tok, err
+}
+
+// refresh trades the refresh cookie for a new access token. stale is the
+// token that got the 401: if another goroutine already replaced it, the
+// caller just retries with the new one.
+func (c *Client) refresh(stale string) bool {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.mu.Lock()
+	tok, cookie := c.token, c.refreshCookie
+	c.mu.Unlock()
+	if tok != stale {
+		return true
+	}
+	if cookie == "" {
+		return false
+	}
+	req, err := http.NewRequest("POST", c.baseURL+"/auth/refresh", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("X-Client", "desktop")
+	req.Header.Set("User-Agent", "Mist Drive Desktop/"+c.version)
+	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie})
+	res, err := c.http.Do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		if res.StatusCode == http.StatusUnauthorized {
+			// Session is dead server-side, stop retrying until next login.
+			c.mu.Lock()
+			c.refreshCookie = ""
+			c.mu.Unlock()
+		}
+		return false
+	}
+	var r LoginResult
+	if json.NewDecoder(res.Body).Decode(&r) != nil || r.Token == "" {
+		return false
+	}
+	// No Set-Cookie means the grace path: keep the current cookie.
+	for _, ck := range res.Cookies() {
+		if ck.Name == "mist_rt" && ck.Value != "" {
+			cookie = ck.Value
+		}
+	}
+	c.mu.Lock()
+	c.token, c.refreshCookie = r.Token, cookie
+	cb := c.onRefresh
+	c.mu.Unlock()
+	if cb != nil {
+		cb(r.Token, cookie)
+	}
+	return true
+}
+
+func (c *Client) do(method, path string, body any, out any) error {
+	var b []byte
+	if body != nil {
+		var err error
+		if b, err = json.Marshal(body); err != nil {
+			return fmt.Errorf("encode request body: %w", err)
+		}
+	}
+	res, err := c.send(func() (*http.Request, error) {
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(b)
+		}
+		req, err := http.NewRequest(method, c.baseURL+path, rdr)
+		if err != nil {
+			return nil, err
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if c.deviceCookie != "" {
+			req.Header.Set("Cookie", "mist_device="+c.deviceCookie)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
@@ -200,6 +328,7 @@ func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (L
 		ClientVersion:  c.version,
 		TotpCode:       totpCode,
 		RememberDevice: rememberDevice,
+		Refresh:        true,
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -230,21 +359,43 @@ func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (L
 	if r.TotpRequired {
 		return r, nil
 	}
-	c.token = r.Token
-	// Extract trusted-device cookie if server set one
+	c.SetToken(r.Token)
 	for _, ck := range res.Cookies() {
-		if ck.Name == "mist_device" {
+		switch ck.Name {
+		case "mist_device":
 			r.DeviceCookie = ck.Value
-			break
+		case "mist_rt":
+			r.RefreshCookie = ck.Value
 		}
 	}
 	return r, nil
 }
 
+// Logout drops the server-side refresh session. Best effort: a dead
+// server just leaves the session to expire.
+func (c *Client) Logout() {
+	c.mu.Lock()
+	cookie := c.refreshCookie
+	c.refreshCookie = ""
+	c.mu.Unlock()
+	if cookie == "" {
+		return
+	}
+	req, err := http.NewRequest("POST", c.baseURL+"/auth/logout", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-Client", "desktop")
+	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie})
+	if res, err := c.http.Do(req); err == nil {
+		res.Body.Close()
+	}
+}
+
 // Me returns the currently authenticated user. Used to verify a
 // restored token on startup and to keep quota info fresh in the UI.
 func (c *Client) Me() (PublicUser, error) {
-	if c.token == "" {
+	if c.Token() == "" {
 		return PublicUser{}, errors.New("not authenticated")
 	}
 	var u PublicUser
@@ -334,15 +485,9 @@ func (c *Client) DownloadFile(key, destPath string) error {
 // to `destPath`. The server builds the archive on the fly so we just
 // pipe the body to disk — no memory ceiling and no temp files.
 func (c *Client) DownloadFolder(prefix, destPath string) error {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/files/download-zip?prefix="+urlEscape(prefix), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Client", "desktop")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	res, err := c.http.Do(req)
+	res, err := c.send(func() (*http.Request, error) {
+		return http.NewRequest("GET", c.baseURL+"/api/files/download-zip?prefix="+urlEscape(prefix), nil)
+	})
 	if err != nil {
 		return err
 	}
@@ -374,15 +519,9 @@ type PreviewResult struct {
 // as data-URIs (base64 JPEG); text as a plain string; binary as an empty
 // Content field with Type "binary".
 func (c *Client) PreviewFile(key string) (PreviewResult, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/files/preview?key="+url.QueryEscape(key), nil)
-	if err != nil {
-		return PreviewResult{}, err
-	}
-	req.Header.Set("X-Client", "desktop")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	res, err := c.http.Do(req)
+	res, err := c.send(func() (*http.Request, error) {
+		return http.NewRequest("GET", c.baseURL+"/api/files/preview?key="+url.QueryEscape(key), nil)
+	})
 	if err != nil {
 		return PreviewResult{}, err
 	}

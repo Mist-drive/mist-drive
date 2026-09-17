@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
-import { api, clearSession, type PublicDevice, type LoginRecord } from '../lib/api'
+import { api, logout, getSessionId, type PublicDevice, type PublicSession, type LoginRecord } from '../lib/api'
 import { useConfirm } from '@shared/components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
@@ -29,6 +29,7 @@ export default function Settings() {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [devices, setDevices] = useState<PublicDevice[]>([])
+  const [sessions, setSessions] = useState<PublicSession[]>([])
   const [loginHistory, setLoginHistory] = useState<LoginRecord[]>([])
   const [email, setEmail] = useState('')
   const [emailSaving, setEmailSaving] = useState(false)
@@ -47,6 +48,7 @@ export default function Settings() {
   useEffect(() => {
     api.me().then(u => { setTotpEnabled(u.totpEnabled); setEmail(u.email ?? '') }).catch(() => {})
     api.devices.list().then(setDevices).catch(() => {})
+    api.sessions.list().then(setSessions).catch(() => {})
     api.loginHistory().then(setLoginHistory).catch(() => {})
   }, [])
 
@@ -129,7 +131,7 @@ export default function Settings() {
     setLogoutAllErr(null); setLogoutAllBusy(true)
     try {
       await api.logoutAll(totpEnabled ? { totpCode: logoutAllTotp } : {})
-      clearSession()
+      await logout()
       window.location.replace('/login')
     } catch (e: any) { setLogoutAllErr(e.message); setLogoutAllBusy(false) }
   }
@@ -148,6 +150,22 @@ export default function Settings() {
     if (!await confirm({ title: t('settings.revokeDeviceConfirmTitle'), message: t('settings.revokeDeviceConfirmMessage'), danger: true })) return
     await api.devices.revoke(id)
     setDevices(ds => ds.filter(d => d.id !== id))
+  }
+
+  const revokeSession = async (id: string) => {
+    const current = id === getSessionId()
+    if (!await confirm({
+      title: t('settings.revokeSessionConfirmTitle'),
+      message: t(current ? 'settings.revokeCurrentSessionConfirmMessage' : 'settings.revokeSessionConfirmMessage'),
+      danger: true,
+    })) return
+    await api.sessions.revoke(id)
+    if (current) {
+      await logout()
+      window.location.replace('/login')
+      return
+    }
+    setSessions(ss => ss.filter(s => s.id !== id))
   }
 
   const revokeAll = async () => {
@@ -287,6 +305,28 @@ export default function Settings() {
           </div>
         )}
       </section>
+
+      <section className="settings-section">
+          <h3>{t('settings.activeSessions')}</h3>
+          {sessions.length === 0 ? (
+            <p className="muted">{t('settings.noSessions')}</p>
+          ) : (
+            <ul className="device-list">
+              {sessions.map(s => (
+                <li key={s.id} className="device-item">
+                  <div className="device-info">
+                    <span className="device-label">
+                      {s.label || t('settings.unknownDevice')}
+                      {s.id === getSessionId() && <> ({t('settings.thisSession')})</>}
+                    </span>
+                    <span className="muted device-expiry">{t('settings.sessionLastUsed', { date: new Date(s.lastUsedAt).toLocaleString() })}</span>
+                  </div>
+                  <button className="ghost" onClick={() => revokeSession(s.id)}>{t('settings.revokeDevice')}</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
       <section className="settings-section">
           <h3>{t('settings.trustedDevices')}</h3>

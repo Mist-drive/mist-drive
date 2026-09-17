@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, PublicUser } from '../lib/api'
+import { api, logout, PublicUser } from '../lib/api'
 import { useConfirm } from '@shared/components/ConfirmDialog'
 import { useTranslation } from '@shared/lib/i18n'
 
@@ -50,6 +50,19 @@ export default function Admin() {
     refresh()
   }
 
+  const revokeAllSessions = async () => {
+    const ok = await confirm({
+      title: t('admin.revokeAllSessionsTitle'),
+      message: t('admin.revokeAllSessionsConfirm'),
+      confirmText: t('admin.revokeAllSessions'),
+      danger: true,
+    })
+    if (!ok) return
+    await api.admin.revokeAllSessions()
+    await logout() // the admin's own session is revoked too
+    window.location.replace('/login')
+  }
+
   return (
     <div>
       <form className="card" onSubmit={create}>
@@ -79,6 +92,11 @@ export default function Admin() {
           ))}
         </tbody>
       </table>
+      <div className="card">
+        <h3>{t('admin.revokeAllSessions')}</h3>
+        <p className="muted">{t('admin.revokeAllSessionsHint')}</p>
+        <button className="danger" onClick={revokeAllSessions}>{t('admin.revokeAllSessions')}</button>
+      </div>
     </div>
   )
 }

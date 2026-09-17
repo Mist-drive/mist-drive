@@ -122,5 +122,27 @@ func (s *Server) adminDeleteUser(c *fiber.Ctx) error {
 	if err := s.Users.Delete(id); err != nil {
 		return s.serverError("admin: delete user", err)
 	}
+	if s.Sessions != nil {
+		_ = s.Sessions.DeleteByUID(id)
+	}
 	return c.JSON(fiber.Map{"ok": true})
+}
+
+// POST /api/admin/sessions/revoke-all: emergency switch. Bumps every
+// user's TokenVersion (the caller's included) and drops all refresh
+// sessions, so everyone must log in again.
+func (s *Server) adminRevokeAllSessions(c *fiber.Ctx) error {
+	n := 0
+	for _, u := range s.Users.List() {
+		u.TokenVersion++
+		if err := s.Users.Update(u); err != nil {
+			return s.serverError("admin: revoke all sessions", err)
+		}
+		if s.Sessions != nil {
+			_ = s.Sessions.DeleteByUID(u.ID)
+		}
+		n++
+	}
+	s.secWarn("admin: revoked all sessions", "ip", clientIP(c), "uid", UID(c), "users", n)
+	return c.JSON(fiber.Map{"ok": true, "users": n})
 }

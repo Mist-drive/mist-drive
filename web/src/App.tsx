@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { clearSession, getUser, fetchHealth } from './lib/api'
+import { logout, getUser, fetchHealth } from './lib/api'
 import { ConfirmProvider } from '@shared/components/ConfirmDialog'
 import LoadingBar from '@shared/components/LoadingBar'
 import Logo from '@shared/components/Logo'
@@ -37,7 +37,7 @@ function Nav({ version }: { version: string }) {
       <a href="/settings" style={loc.pathname.startsWith('/settings') ? activeStyle : undefined}>{t('nav.settings')}</a>
       <div className="spacer" />
       <span className="muted">{u.login}</span>
-      <button className="ghost" onClick={() => { clearSession(); nav('/login') }}>{t('nav.logout')}</button>
+      <button className="ghost" onClick={() => { void logout().then(() => nav('/login')) }}>{t('nav.logout')}</button>
     </div>
   )
 }

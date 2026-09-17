@@ -2,6 +2,7 @@
 // across sibling files by concern:
 //
 //	handlers_auth.go   — login, me
+//	handlers_refresh.go — refresh sessions (web), logout
 //	handlers_files.go  — list, delete, download(-zip)
 //	handlers_upload.go — multipart init/complete/abort
 //	handlers_admin.go  — user CRUD
@@ -29,6 +30,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/notify"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
+	"github.com/yann/mist-drive/api/internal/sessions"
 	"github.com/yann/mist-drive/api/internal/uploads"
 	"github.com/yann/mist-drive/api/internal/users"
 )
@@ -36,6 +38,7 @@ import (
 type Server struct {
 	Cfg           *config.Config
 	Users         *users.Store
+	Sessions      *sessions.Store // nil disables refresh sessions
 	S3            *s3x.Client
 	Uploads       *uploads.Store
 	Reservations  *quota.Reservations
@@ -147,6 +150,8 @@ func (s *Server) Register(app *fiber.App) {
 		return c.JSON(fiber.Map{"ok": true, "version": s.Version, "features": s.Features})
 	})
 	app.Post("/auth/login", s.login)
+	app.Post("/auth/refresh", s.refresh)
+	app.Post("/auth/logout", s.logout)
 	// Zip stream authorized by a single-use ticket (not the JWT). Lives
 	// OUTSIDE /api on purpose: the /api group's AuthMiddleware runs for
 	// every /api/* path, so a no-JWT route must sit at top level. The
@@ -192,6 +197,10 @@ func (s *Server) Register(app *fiber.App) {
 	totp.Delete("/disable", s.totpDisable)
 	totp.Post("/regen-backup", s.totpRegenBackup)
 
+	sessions := api.Group("/sessions")
+	sessions.Get("/", s.listSessions)
+	sessions.Delete("/:id", s.revokeSession)
+
 	devices := api.Group("/devices")
 	devices.Get("/", s.listDevices)
 	devices.Delete("/", s.revokeAllDevices)
@@ -202,6 +211,7 @@ func (s *Server) Register(app *fiber.App) {
 	admin.Post("/users", s.adminCreateUser)
 	admin.Patch("/users/:id/quota", s.adminPatchQuota)
 	admin.Delete("/users/:id", s.adminDeleteUser)
+	admin.Post("/sessions/revoke-all", s.adminRevokeAllSessions)
 }
 
 // currentUser is the tiny helper every authenticated handler uses to

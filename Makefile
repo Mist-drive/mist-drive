@@ -105,7 +105,7 @@ check: ## gofmt check + go vet + race tests on the api module (pre-commit gate)
 	cd api && go vet ./...
 	cd api && go test -race ./... -count=1
 
-install-hooks: ## install the pre-commit hook (fmt + check on api before every commit)
+install-hooks: ## install the pre-commit hook (gofmt staged .go files + vet + tests on api)
 	cp hooks/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
 

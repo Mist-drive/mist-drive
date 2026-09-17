@@ -13,6 +13,14 @@ export type PublicUser = {
   email?: string
 }
 
+export type PublicSession = {
+  id: string
+  label: string
+  createdAt: string
+  lastUsedAt: string
+  expiresAt: string
+}
+
 export type PublicDevice = {
   id: string
   label: string
@@ -37,6 +45,15 @@ const TOKEN_KEY = 'mist.token'
 const USER_KEY = 'mist.user'
 const REMEMBER_KEY = 'mist.remember'
 const SAVED_LOGIN_KEY = 'mist.savedLogin'
+const SESSION_ID_KEY = 'mist.sessionId'
+
+// Refresh session id of this browser, only used to flag "this session".
+export function getSessionId(): string | null {
+  return localStorage.getItem(SESSION_ID_KEY)
+}
+function setSessionId(id?: string) {
+  if (id) localStorage.setItem(SESSION_ID_KEY, id)
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -64,6 +81,58 @@ export function setSession(token: string, user: PublicUser, remember = isRemembe
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  localStorage.removeItem(SESSION_ID_KEY)
+}
+
+// refreshSession trades the HttpOnly refresh cookie for a new access
+// token. Single-flight: parallel 401s share one POST, so the rotation
+// happens once.
+let _refreshing: Promise<boolean> | null = null
+export function refreshSession(): Promise<boolean> {
+  _refreshing ??= fetch('/auth/refresh', { method: 'POST', headers: { 'X-Client': 'web' } })
+    .then(async (res) => {
+      if (!res.ok) return false
+      const { token, user, sessionId } = await res.json() as { token: string; user: PublicUser; sessionId?: string }
+      setSession(token, user)
+      setSessionId(sessionId)
+      return true
+    })
+    .catch(() => false)
+    .finally(() => { _refreshing = null })
+  return _refreshing
+}
+
+// adoptToken keeps this tab logged in after an endpoint revoked every
+// other session and returned a replacement token.
+function adoptToken<T extends { token: string; sessionId?: string }>(res: T): T {
+  const user = getUser()
+  if (res.token && user) setSession(res.token, user)
+  setSessionId(res.sessionId)
+  return res
+}
+
+// logout drops the server-side refresh session, then the local one.
+export async function logout() {
+  await fetch('/auth/logout', { method: 'POST', headers: { 'X-Client': 'web' } }).catch(() => {})
+  clearSession()
+}
+
+// authFetch sends the bearer token; on 401 it refreshes once and
+// retries, and only then gives up to /login.
+async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const send = () => {
+    const headers = new Headers(init.headers)
+    const tok = getToken()
+    if (tok) headers.set('Authorization', `Bearer ${tok}`)
+    return fetch(path, { ...init, headers })
+  }
+  let res = await send()
+  if (res.status === 401 && await refreshSession()) res = await send()
+  if (res.status === 401) {
+    clearSession()
+    window.location.replace('/login')
+  }
+  return res
 }
 
 
@@ -123,6 +192,8 @@ function ensureWS() {
   ws.onclose = () => {
     _ws = null
     _wsFails++
+    // Server closes a socket whose token expired or predates a restart.
+    if (_wsFails === 2 && getToken()) void refreshSession()
     if (_wsFails >= 3 && getToken()) {
       // r.ok matters: through a proxy a dead backend still "answers".
       fetch('/health')
@@ -179,23 +250,17 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
   headers.set('X-Client', 'web')
-  const tok = getToken()
-  if (tok) headers.set('Authorization', `Bearer ${tok}`)
   startLoading()
   try {
     let res: Response
     try {
-      res = await fetch(path, { ...init, headers })
+      res = await authFetch(path, { ...init, headers })
     } catch {
       // fetch rejects only when even the proxy/edge is unreachable.
       serverLost()
       throw new Error(NETWORK_ERROR)
     }
     if (!res.ok) {
-      if (res.status === 401) {
-        clearSession()
-        window.location.replace('/login')
-      }
       if ([500, 502, 503, 504].includes(res.status)) {
         maybeServerLost() // async probe; redirects only if /health is dead
       }
@@ -223,7 +288,7 @@ export async function fetchHealth(): Promise<{ version: string; features: Featur
 
 export type LoginResult =
   | { totp_required: true }
-  | { token: string; user: PublicUser }
+  | { token: string; user: PublicUser; sessionId?: string }
 
 export const api = {
   login: async (login: string, password: string, totpCode?: string, rememberDevice?: boolean): Promise<LoginResult> => {
@@ -238,13 +303,16 @@ export const api = {
           password,
           ...(totpCode ? { totpCode } : {}),
           ...(rememberDevice ? { rememberDevice } : {}),
+          refresh: true,
         }),
       })
       if (!res.ok) {
         const text = await res.text()
         throw new Error(`${res.status}: ${text || res.statusText}`)
       }
-      return res.json() as Promise<LoginResult>
+      const result = await res.json() as LoginResult
+      if ('sessionId' in result) setSessionId(result.sessionId)
+      return result
     } finally {
       endLoading()
     }
@@ -252,15 +320,15 @@ export const api = {
   totp: {
     setup: () => req<{ secret: string; uri: string }>('/api/totp/setup'),
     enable: (secret: string, code: string, password: string) =>
-      req<{ backupCodes: string[] }>('/api/totp/enable', {
+      req<{ backupCodes: string[]; token: string }>('/api/totp/enable', {
         method: 'POST',
-        body: JSON.stringify({ secret, code, password }),
-      }),
+        body: JSON.stringify({ secret, code, password, refresh: true }),
+      }).then(adoptToken),
     disable: (password: string, code: string) =>
-      req<{ ok: boolean }>('/api/totp/disable', {
+      req<{ ok: boolean; token: string }>('/api/totp/disable', {
         method: 'DELETE',
-        body: JSON.stringify({ password, code }),
-      }),
+        body: JSON.stringify({ password, code, refresh: true }),
+      }).then(adoptToken),
     regenBackup: (code: string) =>
       req<{ backupCodes: string[] }>('/api/totp/regen-backup', {
         method: 'POST',
@@ -272,15 +340,19 @@ export const api = {
     revoke: (id: string) => req<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     revokeAll: () => req<{ ok: boolean }>('/api/devices', { method: 'DELETE' }),
   },
+  sessions: {
+    list: () => req<PublicSession[]>('/api/sessions'),
+    revoke: (id: string) => req<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
   loginHistory: () => req<LoginRecord[]>('/api/login-history'),
   me: () => req<PublicUser>('/api/me'),
   updateEmail: (email: string) =>
     req<PublicUser>('/api/me/email', { method: 'PUT', body: JSON.stringify({ email }) }),
   changePassword: (currentPassword: string, newPassword: string, totpCode?: string) =>
-    req<void>('/api/me/password', {
+    req<{ ok: boolean; token: string }>('/api/me/password', {
       method: 'PUT',
-      body: JSON.stringify({ currentPassword, newPassword, ...(totpCode ? { totpCode } : {}) }),
-    }),
+      body: JSON.stringify({ currentPassword, newPassword, ...(totpCode ? { totpCode } : {}), refresh: true }),
+    }).then(adoptToken),
   logoutAll: (opts: { password?: string; totpCode?: string }) =>
     req<void>('/api/me/logout-all', { method: 'POST', body: JSON.stringify(opts) }),
   listFiles: (prefix = '') =>
@@ -337,12 +409,8 @@ export const api = {
       body: JSON.stringify({ uploadId }),
     }),
   previewFile: async (key: string): Promise<PreviewResult> => {
-    const tok = getToken()
-    const res = await fetch(`/api/files/preview?key=${encodeURIComponent(key)}`, {
-      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
-    })
+    const res = await authFetch(`/api/files/preview?key=${encodeURIComponent(key)}`)
     if (!res.ok) {
-      if (res.status === 401) { clearSession(); window.location.replace('/login') }
       throw new Error(`${res.status}: ${res.statusText}`)
     }
     const ptype = res.headers.get('X-Preview-Type') ?? 'binary'
@@ -369,5 +437,7 @@ export const api = {
       }),
     deleteUser: (id: string) =>
       req<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+    revokeAllSessions: () =>
+      req<{ ok: boolean; users: number }>('/api/admin/sessions/revoke-all', { method: 'POST' }),
   },
 }

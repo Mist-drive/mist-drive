@@ -46,6 +46,7 @@ type totpEnableReq struct {
 	Secret   string `json:"secret"`
 	Code     string `json:"code"`
 	Password string `json:"password"`
+	Refresh  bool   `json:"refresh,omitempty"`
 }
 
 // POST /api/totp/enable — verify password + code works for secret, then save + return backup codes.
@@ -77,15 +78,19 @@ func (s *Server) totpEnable(c *fiber.Ctx) error {
 	u.TOTPSecret = r.Secret
 	u.TOTPEnabled = true
 	u.TOTPBackupCodes = hashed
-	if err := s.Users.Update(u); err != nil {
+	// Enabling 2FA often follows a suspected compromise: evict other sessions.
+	res, err := s.revokeOtherSessions(c, u, r.Refresh)
+	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"backupCodes": plain})
+	res["backupCodes"] = plain
+	return c.JSON(res)
 }
 
 type totpDisableReq struct {
 	Password string `json:"password"`
 	Code     string `json:"code"`
+	Refresh  bool   `json:"refresh,omitempty"`
 }
 
 // DELETE /api/totp/disable — requires password + TOTP code (or backup code).
@@ -111,10 +116,12 @@ func (s *Server) totpDisable(c *fiber.Ctx) error {
 	u.TOTPEnabled = false
 	u.TOTPBackupCodes = nil
 	u.TrustedDevices = nil
-	if err := s.Users.Update(u); err != nil {
+	res, err := s.revokeOtherSessions(c, u, r.Refresh)
+	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"ok": true})
+	res["ok"] = true
+	return c.JSON(res)
 }
 
 type totpRegenReq struct {

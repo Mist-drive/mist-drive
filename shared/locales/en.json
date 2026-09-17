@@ -112,6 +112,13 @@
     "done": "Done",
     "enterTotpToDisable": "Enter your TOTP code (or a backup code) to disable 2FA",
     "enterTotpToRegen": "Enter your TOTP code to regenerate backup codes",
+    "activeSessions": "Active sessions",
+    "noSessions": "No active sessions.",
+    "thisSession": "this session",
+    "sessionLastUsed": "Last used {{date}}",
+    "revokeSessionConfirmTitle": "Revoke this session?",
+    "revokeSessionConfirmMessage": "That browser or app will be signed out within 15 minutes, at its next token renewal.",
+    "revokeCurrentSessionConfirmMessage": "This is the session you are using: you will be signed out now.",
     "trustedDevices": "Trusted devices",
     "noDevices": "No trusted devices.",
     "unknownDevice": "Unknown device",
@@ -154,7 +161,11 @@
     "delete": "Delete",
     "deleteUserTitle": "Delete user {{login}}",
     "deleteUserConfirm": "This will permanently delete user \"{{login}}\" and their entire bucket ({{size}} of data). This cannot be undone.",
-    "deleteUserConfirmText": "Delete user"
+    "deleteUserConfirmText": "Delete user",
+    "revokeAllSessions": "Revoke all sessions",
+    "revokeAllSessionsTitle": "Revoke every session?",
+    "revokeAllSessionsHint": "Emergency switch: signs out every user on every browser and desktop app, you included.",
+    "revokeAllSessionsConfirm": "Every user, including you, will have to log in again. Trusted devices are kept."
   },
   "sync": {
     "title": "Sync",

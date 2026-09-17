@@ -16,6 +16,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/quota"
+	"github.com/yann/mist-drive/api/internal/sessions"
 	"github.com/yann/mist-drive/api/internal/uploads"
 	"github.com/yann/mist-drive/api/internal/users"
 )
@@ -37,6 +38,8 @@ func newUnitFixture(t *testing.T) *unitFixture {
 	cfg := &config.Config{
 		JWTSecret:    unitSecret,
 		JWTTTL:       time.Hour,
+		RefreshTTL:   24 * time.Hour,
+		AccessTTL:    time.Minute,
 		DataDir:      dataDir,
 		DefaultQuota: 10 << 30,
 	}
@@ -53,6 +56,11 @@ func newUnitFixture(t *testing.T) *unitFixture {
 	upStore, err := uploads.NewStore(ds, dataDir)
 	if err != nil {
 		t.Fatalf("uploads.NewStore: %v", err)
+	}
+
+	sessStore, err := sessions.NewStore(ds)
+	if err != nil {
+		t.Fatalf("sessions.NewStore: %v", err)
 	}
 
 	hash, err := fiberauth.HashPassword("pw")
@@ -92,6 +100,7 @@ func newUnitFixture(t *testing.T) *unitFixture {
 		Cfg:          cfg,
 		Users:        uStore,
 		Uploads:      upStore,
+		Sessions:     sessStore,
 		Reservations: quota.New(),
 		Version:      "dev",
 	}

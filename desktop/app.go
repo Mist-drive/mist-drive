@@ -67,19 +67,13 @@ func NewApp(ver, githubURL string) *App {
 		panic(fmt.Errorf("open settings: %w", err))
 	}
 	s := st.Get()
-	api := apiclient.New(s.APIURL, s.JWT, ver, true)
-	api.SetUploadRateKBps(s.MaxUploadRateKBps)
-	if s.TrustedDeviceCookie != "" {
-		api.SetDeviceCookie(s.TrustedDeviceCookie)
-	}
 	a := &App{
 		version:   ver,
 		githubURL: githubURL,
 		settings:  st,
-		// InsecureTLS=true: plan originally required HTTPS, but to
-		// develop against http://localhost:3000 we accept both.
-		api: api,
 	}
+	api := a.newAPI(s.APIURL, st.Secrets(), s.MaxUploadRateKBps)
+	a.api = api
 	a.engine = syncpkg.New(api, st, func(msg string) {
 		fmt.Println("[sync]", msg)
 	})
@@ -114,8 +108,10 @@ func NewApp(ver, githubURL string) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	s := a.settings.Get()
-	if s.JWT != "" {
-		a.ws.Start(s.APIURL, s.JWT)
+	if sec := a.settings.Secrets(); sec.JWT != "" || sec.RefreshCookie != "" {
+		// An expired JWT gets the ws rejected; the first API call refreshes
+		// it and onRefresh restarts the ws with the new token.
+		a.ws.Start(s.APIURL, sec.JWT)
 		// The engine loop runs whenever the user is logged in. It's
 		// cheap when all folders are disabled (the pass becomes a
 		// no-op) and this removes a whole class of "why isn't sync
@@ -125,10 +121,29 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
+// newAPI builds the one API client for apiURL. Keep a single client per
+// server: two clients refreshing independently would replay a rotated
+// refresh token and get the session revoked.
+func (a *App) newAPI(apiURL string, sec settings.Secrets, rateKBps int) *apiclient.Client {
+	api := apiclient.New(apiURL, sec.JWT, a.version)
+	api.SetUploadRateKBps(rateKBps)
+	if sec.DeviceCookie != "" {
+		api.SetDeviceCookie(sec.DeviceCookie)
+	}
+	api.SetRefresh(sec.RefreshCookie, func(tok, rc string) {
+		err := a.settings.UpdateSecrets(apiURL, func(x *settings.Secrets) { x.JWT, x.RefreshCookie = tok, rc })
+		if err != nil {
+			fmt.Println("[auth] save refreshed session:", err)
+		}
+		a.ws.Start(apiURL, tok) // ws authenticates once, reconnect with the new token
+	})
+	return api
+}
+
 // --- Settings ---
 
-// GetSettings returns the full on-disk settings struct. Exposed so the
-// frontend can render the settings screen and pre-fill forms.
+// GetSettings returns the active environment's settings for the settings
+// screen. Credentials are never part of it (see settings.Secrets).
 func (a *App) GetSettings() settings.Settings {
 	return a.settings.Get()
 }
@@ -139,13 +154,19 @@ func (a *App) ListEnvironments() []string {
 	return a.settings.ListEnvironments()
 }
 
-// SaveSettings persists the provided settings and reconfigures the
-// API client so later calls use the new URL / token.
+// SaveSettings persists the provided settings. The API client is only
+// rebuilt when the URL changes: a second client for the same server would
+// fight the first one over the refresh token.
 func (a *App) SaveSettings(s settings.Settings) error {
+	prevURL := a.settings.Get().APIURL
 	if err := a.settings.Save(s); err != nil {
 		return err
 	}
-	a.api = apiclient.New(s.APIURL, s.JWT, a.version, true)
+	if s.APIURL != prevURL {
+		a.api = a.newAPI(s.APIURL, a.settings.SecretsFor(s.APIURL), s.MaxUploadRateKBps)
+	} else {
+		a.api.SetUploadRateKBps(s.MaxUploadRateKBps)
+	}
 	return nil
 }
 
@@ -158,15 +179,15 @@ type LoginResponse struct {
 	User         apiclient.PublicUser `json:"user"`
 }
 
-// Login authenticates against the API and stores the resulting JWT in
-// settings on success. Returns LoginResponse so the frontend can handle
+// Login authenticates against the API and stores the resulting tokens in
+// the keyring on success. Returns LoginResponse so the frontend can handle
 // the two-step TOTP flow: first call with empty totpCode, then re-call
 // with the code when TotpRequired is true.
 func (a *App) Login(apiURL, login, password, totpCode string, rememberLogin, rememberDevice bool) (LoginResponse, error) {
-	cli := apiclient.New(apiURL, "", a.version, true)
+	cli := apiclient.New(apiURL, "", a.version)
 	// Restore stored device cookie so the server can skip TOTP for trusted devices.
-	if s := a.settings.Get(); s.TrustedDeviceCookie != "" {
-		cli.SetDeviceCookie(s.TrustedDeviceCookie)
+	if dc := a.settings.SecretsFor(apiURL).DeviceCookie; dc != "" {
+		cli.SetDeviceCookie(dc)
 	}
 	result, err := cli.Login(login, password, totpCode, rememberDevice)
 	if err != nil {
@@ -177,18 +198,21 @@ func (a *App) Login(apiURL, login, password, totpCode string, rememberLogin, rem
 	}
 	s := a.settings.Get()
 	s.APIURL = apiURL
-	s.JWT = result.Token
 	s.Login = result.User.Login
 	s.RememberLogin = rememberLogin
-	if result.DeviceCookie != "" {
-		s.TrustedDeviceCookie = result.DeviceCookie
-	}
 	if err := a.settings.Save(s); err != nil {
 		return LoginResponse{}, err
 	}
-	a.api = apiclient.New(apiURL, result.Token, a.version, true)
-	a.api.SetDeviceCookie(result.DeviceCookie)
-	a.api.SetUploadRateKBps(s.MaxUploadRateKBps)
+	err = a.settings.UpdateSecrets(apiURL, func(x *settings.Secrets) {
+		x.JWT, x.RefreshCookie = result.Token, result.RefreshCookie
+		if result.DeviceCookie != "" {
+			x.DeviceCookie = result.DeviceCookie
+		}
+	})
+	if err != nil {
+		return LoginResponse{}, err
+	}
+	a.api = a.newAPI(apiURL, a.settings.SecretsFor(apiURL), s.MaxUploadRateKBps)
 	a.ws.Start(apiURL, result.Token)
 	// Bounce the engine so it picks up the fresh API client and token.
 	a.engine.Stop()
@@ -243,18 +267,21 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	return true
 }
 
-// Logout wipes the stored JWT. The URL and folder config are kept
-// so the next login is a single field.
+// Logout wipes the stored session tokens. The trusted-device cookie, URL
+// and folder config are kept so the next login is a single field.
 func (a *App) Logout() error {
+	a.api.Logout()
 	s := a.settings.Get()
-	s.JWT = ""
 	if !s.RememberLogin {
 		s.Login = ""
 	}
 	if err := a.settings.Save(s); err != nil {
 		return err
 	}
-	a.api = apiclient.New(s.APIURL, "", a.version, true)
+	if err := a.settings.UpdateSecrets(s.APIURL, func(x *settings.Secrets) { x.JWT, x.RefreshCookie = "", "" }); err != nil {
+		return err
+	}
+	a.api = a.newAPI(s.APIURL, a.settings.SecretsFor(s.APIURL), s.MaxUploadRateKBps)
 	a.ws.Stop()
 	a.engine.Stop()
 	return nil
@@ -815,8 +842,8 @@ func (a *App) OpenWebApp() {
 	// Fragment (not query) so the token never hits the server access
 	// log and isn't included in any HTTP referer header. The web app
 	// consumes it once and immediately scrubs it from history.
-	if s.JWT != "" {
-		url += "#token=" + s.JWT
+	if tok := a.api.Token(); tok != "" {
+		url += "#token=" + tok
 	}
 	runtime.BrowserOpenURL(a.ctx, url)
 }

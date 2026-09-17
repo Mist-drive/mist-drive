@@ -1,10 +1,15 @@
 #!/bin/sh
-# Format + vet + tests (unit, no race) before every commit — the full
-# race-detector check + integration tests run in CI, not here (race
-# tests are slow, not worth the wait on every commit). Install with
-# `make install-hooks`.
-make fmt
-git add -u
+# Format + vet + tests (unit, no race) before every commit. The full
+# race-detector check + integration tests run in CI, not here. Install
+# with `make install-hooks`.
+# Only gofmt/re-add the .go files actually staged: `make fmt` + `git add -u`
+# touched every modified file in the repo, silently pulling unrelated
+# work-in-progress into the commit.
+staged_go=$(git diff --cached --name-only --diff-filter=ACM -z -- '*.go')
+if [ -n "$staged_go" ]; then
+    printf '%s' "$staged_go" | xargs -0 gofmt -w
+    printf '%s' "$staged_go" | xargs -0 git add
+fi
 
 echo "Running go vet + tests..."
 if ! (cd api && go vet ./... && go test ./... -count=1); then

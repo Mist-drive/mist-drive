@@ -11,9 +11,13 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	"github.com/zalando/go-keyring"
 )
 
 type SyncFolder struct {
@@ -34,10 +38,14 @@ type SyncFolder struct {
 
 // EnvSettings holds config that is specific to a single API endpoint.
 type EnvSettings struct {
-	JWT                  string       `json:"jwt"`
+	// JWT, TrustedDeviceCookie and RefreshCookie are only a fallback for
+	// machines without an OS keyring (see Secrets). Never part of Settings:
+	// the frontend must not read them, nor overwrite a rotated value.
+	JWT                  string       `json:"jwt,omitempty"`
 	Login                string       `json:"login"`
 	RememberLogin        bool         `json:"rememberLogin"`
 	TrustedDeviceCookie  string       `json:"trustedDeviceCookie,omitempty"`
+	RefreshCookie        string       `json:"refreshCookie,omitempty"`
 	Folders              []SyncFolder `json:"folders"`
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
@@ -56,10 +64,8 @@ func envDefaults() EnvSettings {
 // need to know about the multi-env disk layout.
 type Settings struct {
 	APIURL               string       `json:"apiUrl"`
-	JWT                  string       `json:"jwt"`
 	Login                string       `json:"login"`
 	RememberLogin        bool         `json:"rememberLogin"`
-	TrustedDeviceCookie  string       `json:"trustedDeviceCookie,omitempty"`
 	Folders              []SyncFolder `json:"folders"`
 	MaxConcurrentUploads int          `json:"maxConcurrentUploads"`
 	MaxUploadRateKBps    int          `json:"maxUploadRateKBps"`
@@ -126,6 +132,9 @@ func Open() (*Store, error) {
 	st := &Store{path: p, d: diskDefaults()}
 	if err := st.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
+	}
+	if err := st.migrateSecrets(); err != nil {
+		return nil, fmt.Errorf("migrate secrets to keyring: %w", err)
 	}
 	return st, nil
 }
@@ -217,10 +226,8 @@ func (st *Store) Get() Settings {
 	}
 	return Settings{
 		APIURL:               st.d.ActiveEnv,
-		JWT:                  e.JWT,
 		Login:                e.Login,
 		RememberLogin:        e.RememberLogin,
-		TrustedDeviceCookie:  e.TrustedDeviceCookie,
 		Folders:              e.Folders,
 		MaxConcurrentUploads: e.MaxConcurrentUploads,
 		MaxUploadRateKBps:    e.MaxUploadRateKBps,
@@ -251,10 +258,8 @@ func (st *Store) Save(s Settings) error {
 		e = &def
 		st.d.Environments[url] = e
 	}
-	e.JWT = s.JWT
 	e.Login = s.Login
 	e.RememberLogin = s.RememberLogin
-	e.TrustedDeviceCookie = s.TrustedDeviceCookie
 	e.Folders = s.Folders
 	e.MaxConcurrentUploads = s.MaxConcurrentUploads
 	e.MaxUploadRateKBps = s.MaxUploadRateKBps
@@ -285,4 +290,121 @@ func (st *Store) flush() error {
 		return err
 	}
 	return os.Rename(tmp, st.path)
+}
+
+// keyringService names the OS keyring entries, one per environment URL.
+const keyringService = "mist-drive"
+
+// keyringSet is swapped in tests to simulate a keyring that reads but refuses writes.
+var keyringSet = keyring.Set
+
+// Secrets are an environment's auth credentials. They live in the OS
+// keyring as one JSON entry, in the settings file only when no keyring
+// is available.
+type Secrets struct {
+	JWT           string `json:"jwt,omitempty"`
+	RefreshCookie string `json:"refreshCookie,omitempty"`
+	DeviceCookie  string `json:"deviceCookie,omitempty"`
+}
+
+func (s Secrets) empty() bool { return s == Secrets{} }
+
+// Secrets returns the active environment's credentials.
+func (st *Store) Secrets() Secrets {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.readSecrets(st.d.ActiveEnv)
+}
+
+// SecretsFor returns the credentials of environment url.
+func (st *Store) SecretsFor(url string) Secrets {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return st.readSecrets(url)
+}
+
+// UpdateSecrets applies fn to url's credentials and persists them in one
+// locked read-modify-write, so a token refresh and a login can't clobber
+// each other. No generation bump: a token refresh must not abort an
+// in-flight sync pass.
+func (st *Store) UpdateSecrets(url string, fn func(*Secrets)) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	sec := st.readSecrets(url)
+	fn(&sec)
+	st.writeSecrets(url, sec)
+	return st.flush()
+}
+
+// readSecrets: keyring first, else the file fallback. Caller holds st.mu.
+func (st *Store) readSecrets(url string) Secrets {
+	if v, err := keyring.Get(keyringService, url); err == nil {
+		var sec Secrets
+		if json.Unmarshal([]byte(v), &sec) != nil {
+			// Pre-JSON entry: the raw refresh cookie.
+			sec = Secrets{RefreshCookie: v}
+		}
+		return sec
+	}
+	if e, ok := st.d.Environments[url]; ok {
+		return Secrets{JWT: e.JWT, RefreshCookie: e.RefreshCookie, DeviceCookie: e.TrustedDeviceCookie}
+	}
+	return Secrets{}
+}
+
+// writeSecrets stores sec in the keyring and blanks the file fields, or
+// falls back to the file. Caller holds st.mu and flushes.
+func (st *Store) writeSecrets(url string, sec Secrets) {
+	e, ok := st.d.Environments[url]
+	if !ok {
+		def := envDefaults()
+		e = &def
+		st.d.Environments[url] = e
+	}
+	e.JWT, e.RefreshCookie, e.TrustedDeviceCookie = "", "", ""
+	if sec.empty() {
+		_ = keyring.Delete(keyringService, url)
+		return
+	}
+	b, _ := json.Marshal(sec)
+	if err := keyringSet(keyringService, url, string(b)); err != nil {
+		// A readable but unwritable keyring would keep serving the old,
+		// rotated-out refresh token: drop it so reads fall through to the file.
+		_ = keyring.Delete(keyringService, url)
+		// ponytail: no secret service (headless Linux), file stays 0600.
+		e.JWT, e.RefreshCookie, e.TrustedDeviceCookie = sec.JWT, sec.RefreshCookie, sec.DeviceCookie
+	}
+}
+
+// migrateSecrets moves credentials still in the settings file (written
+// before the keyring move, or while no keyring was available) into the
+// keyring, and rewrites pre-JSON keyring entries. File values win: the
+// file is only written when the keyring failed, so it holds the newest.
+func (st *Store) migrateSecrets() error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	changed := false
+	for url, e := range st.d.Environments {
+		raw, err := keyring.Get(keyringService, url)
+		legacyRaw := err == nil && !strings.HasPrefix(raw, "{")
+		if e.JWT == "" && e.RefreshCookie == "" && e.TrustedDeviceCookie == "" && !legacyRaw {
+			continue
+		}
+		sec := st.readSecrets(url)
+		if e.JWT != "" {
+			sec.JWT = e.JWT
+		}
+		if e.RefreshCookie != "" {
+			sec.RefreshCookie = e.RefreshCookie
+		}
+		if e.TrustedDeviceCookie != "" {
+			sec.DeviceCookie = e.TrustedDeviceCookie
+		}
+		st.writeSecrets(url, sec)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return st.flush()
 }

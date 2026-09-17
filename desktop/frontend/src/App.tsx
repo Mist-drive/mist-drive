@@ -9,7 +9,7 @@ import LoginScreen from './screens/Login'
 import Home from './screens/Home'
 import { useTranslation } from '@shared/lib/i18n'
 
-// Boot flow: we have a stored JWT in settings.json ⇒ try Me().
+// Boot flow: we have a stored session (OS keyring) ⇒ try Me().
 // If it succeeds, land on Home; otherwise show the Login screen.
 // `null` = still checking, avoids a login-flash on startup.
 export default function App() {

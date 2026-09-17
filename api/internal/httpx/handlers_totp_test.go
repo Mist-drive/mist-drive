@@ -46,10 +46,13 @@ func totpEnable(t *testing.T, f *unitFixture) (secret string, backupCodes []stri
 	}
 	var out struct {
 		BackupCodes []string `json:"backupCodes"`
+		Token       string   `json:"token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
+	// Enabling TOTP revokes every prior session, the caller's included.
+	f.userToken = out.Token
 	return secret, out.BackupCodes
 }
 

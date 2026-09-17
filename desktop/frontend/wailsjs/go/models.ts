@@ -179,10 +179,8 @@ export namespace settings {
 	}
 	export class Settings {
 	    apiUrl: string;
-	    jwt: string;
 	    login: string;
 	    rememberLogin: boolean;
-	    trustedDeviceCookie?: string;
 	    folders: SyncFolder[];
 	    maxConcurrentUploads: number;
 	    maxUploadRateKBps: number;
@@ -197,10 +195,8 @@ export namespace settings {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.apiUrl = source["apiUrl"];
-	        this.jwt = source["jwt"];
 	        this.login = source["login"];
 	        this.rememberLogin = source["rememberLogin"];
-	        this.trustedDeviceCookie = source["trustedDeviceCookie"];
 	        this.folders = this.convertValues(source["folders"], SyncFolder);
 	        this.maxConcurrentUploads = source["maxConcurrentUploads"];
 	        this.maxUploadRateKBps = source["maxUploadRateKBps"];

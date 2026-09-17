@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/yann/mist-drive/api/internal/notify"
 	"github.com/yann/mist-drive/api/internal/quota"
 	"github.com/yann/mist-drive/api/internal/s3x"
+	"github.com/yann/mist-drive/api/internal/sessions"
 	"github.com/yann/mist-drive/api/internal/uploads"
 	"github.com/yann/mist-drive/api/internal/users"
 	"github.com/yann/mist-drive/api/internal/webui"
@@ -62,6 +64,10 @@ func main() {
 	if err != nil {
 		appLog.Fatal("uploads store init: %v", err)
 	}
+	sessionStore, err := sessions.NewStore(ds)
+	if err != nil {
+		appLog.Fatal("sessions store init: %v", err)
+	}
 	s3c, err := s3x.New(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3UseSSL, cfg.PublicS3Host)
 	if err != nil {
 		appLog.Fatal("s3 client init: %v", err)
@@ -82,6 +88,7 @@ func main() {
 	srv := &httpx.Server{
 		Cfg: cfg, Users: userStore, S3: s3c,
 		Uploads:      uploadStore,
+		Sessions:     sessionStore,
 		Reservations: quota.New(),
 		Events:       eventsHub,
 		Log:          appLog.With("component", "auth"),
@@ -124,10 +131,18 @@ func main() {
 		start := time.Now()
 		err := c.Next()
 		if !appLog.ShouldSkip(c.Path()) {
+			// A returned error is turned into the response by the error
+			// handler only after this middleware, so derive its status here.
+			status := c.Response().StatusCode()
+			if fe := (*fiber.Error)(nil); errors.As(err, &fe) {
+				status = fe.Code
+			} else if err != nil {
+				status = fiber.StatusInternalServerError
+			}
 			args := []any{
 				"method", c.Method(),
 				"path", c.Path(),
-				"status", c.Response().StatusCode(),
+				"status", status,
 				"latency", time.Since(start),
 			}
 			if uid := httpx.UID(c); uid != "" {

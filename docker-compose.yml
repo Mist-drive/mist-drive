@@ -23,6 +23,8 @@ services:
       PORT: "3000"
       JWT_SECRET: ${JWT_SECRET}
       JWT_TTL: ${JWT_TTL}
+      ACCESS_TTL: ${ACCESS_TTL:-}
+      REFRESH_TTL: ${REFRESH_TTL:-}
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       S3_ENDPOINT: minio:9000

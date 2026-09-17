@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"mist-drive-desktop/internal/apiclient"
 )
 
 type Client struct {
@@ -51,7 +52,7 @@ func (c *Client) Start(apiURL, token string) {
 	c.mu.Lock()
 	c.cancel = cancel
 	c.mu.Unlock()
-	go c.loop(ctx, wsURL, token)
+	go c.loop(ctx, wsURL, token, apiclient.IsLoopbackURL(apiURL))
 }
 
 func (c *Client) Stop() {
@@ -75,12 +76,12 @@ func (c *Client) Stop() {
 // though the auth frame gets rejected right after.
 const wsAuthGrace = 3 * time.Second
 
-func (c *Client) loop(ctx context.Context, wsURL, token string) {
+func (c *Client) loop(ctx context.Context, wsURL, token string, insecureTLS bool) {
 	backoff := 500 * time.Millisecond
-	// InsecureSkipVerify mirrors the apiclient — dev uses self-signed or
-	// plain http. The JWT is sent as the first message, not in the URL.
+	// Same TLS rule as apiclient: verify unless loopback. The JWT is sent
+	// as the first message, not in the URL.
 	httpc := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
 	}}
 	for {
 		if ctx.Err() != nil {

@@ -18,10 +18,12 @@ type loginReq struct {
 	ClientVersion  string `json:"clientVersion,omitempty"`
 	TOTPCode       string `json:"totpCode,omitempty"`
 	RememberDevice bool   `json:"rememberDevice,omitempty"`
+	Refresh        bool   `json:"refresh,omitempty"` // web: short access token + refresh cookie
 }
 type loginResp struct {
-	Token string           `json:"token"`
-	User  users.PublicUser `json:"user"`
+	Token     string           `json:"token"`
+	User      users.PublicUser `json:"user"`
+	SessionID string           `json:"sessionId,omitempty"` // refresh session id, when one was started
 }
 
 func (s *Server) login(c *fiber.Ctx) error {
@@ -113,11 +115,18 @@ func (s *Server) login(c *fiber.Ctx) error {
 		}()
 	}
 
-	tok, err := fiberauth.Issue(s.Cfg.JWTSecret, u.ID, []string{string(u.Role)}, u.TokenVersion, s.Cfg.JWTTTL)
+	ttl, sid := s.Cfg.JWTTTL, ""
+	if s.refreshEnabled(r.Refresh) {
+		if sid, err = s.startRefreshSession(c, u); err != nil {
+			return err
+		}
+		ttl = s.Cfg.AccessTTL
+	}
+	tok, err := fiberauth.Issue(s.Cfg.JWTSecret, u.ID, []string{string(u.Role)}, u.TokenVersion, ttl)
 	if err != nil {
 		return err
 	}
-	return c.JSON(loginResp{Token: tok, User: u.Public()})
+	return c.JSON(loginResp{Token: tok, User: u.Public(), SessionID: sid})
 }
 
 // GET /api/login-history
@@ -176,6 +185,7 @@ type changePasswordReq struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
 	TOTPCode        string `json:"totpCode,omitempty"`
+	Refresh         bool   `json:"refresh,omitempty"`
 }
 
 func (s *Server) changePassword(c *fiber.Ctx) error {
@@ -209,10 +219,13 @@ func (s *Server) changePassword(c *fiber.Ctx) error {
 		return err
 	}
 	u.BcryptPwd = hash
-	if err := s.Users.Update(u); err != nil {
-		return s.serverError("auth: change password", err)
+	// A password change must evict whoever else holds a session.
+	res, err := s.revokeOtherSessions(c, u, r.Refresh)
+	if err != nil {
+		return err
 	}
-	return c.JSON(fiber.Map{"ok": true})
+	res["ok"] = true
+	return c.JSON(res)
 }
 
 type logoutAllReq struct {
@@ -248,6 +261,9 @@ func (s *Server) logoutAll(c *fiber.Ctx) error {
 	u.TokenVersion++
 	if err := s.Users.Update(u); err != nil {
 		return s.serverError("auth: logout-all", err)
+	}
+	if s.Sessions != nil {
+		_ = s.Sessions.DeleteByUID(u.ID)
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }
