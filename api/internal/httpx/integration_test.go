@@ -48,7 +48,7 @@ func startMinio(t *testing.T) (endpoint, access, secret string) {
 	t.Helper()
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:latest",
+		Image:        "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     "minioadmin",
