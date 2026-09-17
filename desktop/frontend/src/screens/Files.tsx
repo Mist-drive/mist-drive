@@ -131,12 +131,14 @@ export default function Files({ onQuotaChange, user }: Props) {
 
   const toggle = (p: string) => setExpanded((e) => ({ ...e, [p]: !e[p] }))
 
+  // One failed action is not a dead server: a long transfer can drop for
+  // its own reasons, and bouncing to login loses the whole session over
+  // it. Only the refresh path (above) decides the server is gone.
   const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
     setBusy(label); setErr(null); startLoading()
     try { return await fn() }
     catch (e: any) {
       if (is401(e)) { notifySessionExpired(); return null }
-      if (isNetworkError(e)) { notifyServerLost(); return null }
       setErr(String(e?.message ?? e)); return null
     }
     finally { setBusy(null); endLoading() }

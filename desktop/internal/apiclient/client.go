@@ -165,17 +165,29 @@ type LoginResult struct {
 	RefreshCookie string     `json:"-"` // mist_rt, extracted from Set-Cookie
 }
 
+// callTimeout bounds short JSON calls (and time-to-first-byte on every
+// call). Streaming calls get no wall-clock cap. var, not const, so tests
+// can shrink it.
+var callTimeout = 30 * time.Second
+
 // New builds a client against the given base URL. Certificates are
 // verified except on loopback hosts (local self-signed dev certs).
 func New(baseURL, token, version string) *Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: IsLoopbackURL(baseURL)},
-	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: IsLoopbackURL(baseURL)}
+	// Bounds time-to-first-byte only, never the body: a dead server is
+	// still caught, a long transfer is not.
+	tr.ResponseHeaderTimeout = callTimeout
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
 		version: version,
-		http:    &http.Client{Timeout: 30 * time.Second, Transport: tr},
+		// No http.Client.Timeout: it also bounds body streaming, so a
+		// folder zip or a rate-limited part upload taking longer than it
+		// died mid-transfer. Short JSON calls carry their own deadline.
+		// ponytail: a body that stalls after headers hangs forever, add a
+		// read-idle watchdog if that ever shows up.
+		http: &http.Client{Transport: tr},
 	}
 }
 
@@ -243,7 +255,9 @@ func (c *Client) refresh(stale string) bool {
 	if cookie == "" {
 		return false
 	}
-	req, err := http.NewRequest("POST", c.baseURL+"/auth/refresh", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/auth/refresh", nil)
 	if err != nil {
 		return false
 	}
@@ -292,12 +306,14 @@ func (c *Client) do(method, path string, body any, out any) error {
 			return fmt.Errorf("encode request body: %w", err)
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
 	res, err := c.send(func() (*http.Request, error) {
 		var rdr io.Reader
 		if body != nil {
 			rdr = bytes.NewReader(b)
 		}
-		req, err := http.NewRequest(method, c.baseURL+path, rdr)
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, rdr)
 		if err != nil {
 			return nil, err
 		}
@@ -337,7 +353,9 @@ func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (L
 	if err != nil {
 		return LoginResult{}, err
 	}
-	req, err := http.NewRequest("POST", c.baseURL+"/auth/login", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/auth/login", bytes.NewReader(body))
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -385,7 +403,9 @@ func (c *Client) Logout() {
 	if cookie == "" {
 		return
 	}
-	req, err := http.NewRequest("POST", c.baseURL+"/auth/logout", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/auth/logout", nil)
 	if err != nil {
 		return
 	}
@@ -433,8 +453,10 @@ func (c *Client) ListFiles() (ListResponse, error) {
 	etag, cached := c.listETag, c.lastList
 	c.listMu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
 	res, err := c.send(func() (*http.Request, error) {
-		req, err := http.NewRequest("GET", c.baseURL+"/api/files?prefix=", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/files?prefix=", nil)
 		if err != nil {
 			return nil, err
 		}
