@@ -3,10 +3,10 @@ package httpx
 import (
 	"strings"
 	"time"
+	"uuid"
 
 	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"github.com/yann/mist-drive/api/internal/users"
 )
 
@@ -76,7 +76,7 @@ func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	id := uuid.NewString()
+	id := uuid.New().String()
 	u := &users.User{
 		ID: id, Login: r.Login, BcryptPwd: hash,
 		QuotaBytes: r.QuotaBytes,

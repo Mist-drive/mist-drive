@@ -1,6 +1,6 @@
 module mist-drive-desktop
 
-go 1.25.0
+go 1.27.1
 
 require (
 	fyne.io/systray v1.12.0

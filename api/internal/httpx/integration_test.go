@@ -21,13 +21,13 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/fasthttp/websocket"
 	miniogo "github.com/minio/minio-go/v7"
 	miniogocreds "github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -129,7 +129,7 @@ func newFixture(t *testing.T, quotaBytes int64) *fixture {
 
 	hash, _ := fiberauth.HashPassword("pw")
 	u := &users.User{
-		ID:         uuid.NewString(),
+		ID:         uuid.New().String(),
 		Login:      "alice",
 		BcryptPwd:  hash,
 		QuotaBytes: quotaBytes,

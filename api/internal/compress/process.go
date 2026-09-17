@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"uuid"
 
 	gcompress "github.com/creativeyann17/go-zip/pkg/compress"
 	gdecompress "github.com/creativeyann17/go-zip/pkg/decompress"
 	"github.com/creativeyann17/go-zip/pkg/verify"
-	"github.com/google/uuid"
 
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/events"
@@ -188,7 +188,7 @@ func startTracking(tracker ProcessingTracker, hub *events.Hub, item Item) func()
 // makeTmpDir creates an isolated job directory under dataDir/compress-tmp and
 // returns its path along with a cleanup func to defer.
 func makeTmpDir(dataDir string) (string, func(), error) {
-	tmpDir := filepath.Join(dataDir, "compress-tmp", uuid.NewString())
+	tmpDir := filepath.Join(dataDir, "compress-tmp", uuid.New().String())
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("mkdir tmp: %w", err)
 	}

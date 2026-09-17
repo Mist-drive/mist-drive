@@ -1,15 +1,14 @@
 module github.com/yann/mist-drive/api
 
-go 1.26.2
+go 1.27.1
 
 require (
 	github.com/creativeyann17/go-docstore v0.1.0
-	github.com/creativeyann17/go-fiber-auth v0.2.1
+	github.com/creativeyann17/go-fiber-auth v0.3.0
 	github.com/creativeyann17/go-zip v1.0.0
 	github.com/fasthttp/websocket v1.5.3
 	github.com/gofiber/fiber/v2 v2.52.14
 	github.com/gofiber/websocket/v2 v2.2.1
-	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.0.90
 	github.com/pquerna/otp v1.5.0
 	github.com/testcontainers/testcontainers-go v0.41.0
@@ -49,6 +48,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lufia/plan9stats v0.0.0-20250317134145-8bc96cf8fc35 // indirect

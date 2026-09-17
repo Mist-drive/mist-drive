@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"path/filepath"
 	"time"
+	"uuid"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/google/uuid"
 
 	"github.com/creativeyann17/go-docstore"
 	fiberauth "github.com/creativeyann17/go-fiber-auth"
@@ -186,7 +186,7 @@ func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
 		if err != nil {
 			return err
 		}
-		id := uuid.NewString()
+		id := uuid.New().String()
 		u := &users.User{
 			ID: id, Login: cfg.AdminLogin, BcryptPwd: hash,
 			QuotaBytes: cfg.DefaultQuota,

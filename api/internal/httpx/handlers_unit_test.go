@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/creativeyann17/go-docstore"
 	fiberauth "github.com/creativeyann17/go-fiber-auth"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"github.com/yann/mist-drive/api/internal/config"
 	"github.com/yann/mist-drive/api/internal/httpx"
 	"github.com/yann/mist-drive/api/internal/quota"
@@ -68,7 +68,7 @@ func newUnitFixture(t *testing.T) *unitFixture {
 		t.Fatal(err)
 	}
 	alice := &users.User{
-		ID:         uuid.NewString(),
+		ID:         uuid.New().String(),
 		Login:      "alice",
 		BcryptPwd:  hash,
 		QuotaBytes: 10 << 30,
@@ -83,7 +83,7 @@ func newUnitFixture(t *testing.T) *unitFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminID := uuid.NewString()
+	adminID := uuid.New().String()
 	admin := &users.User{
 		ID:         adminID,
 		Login:      "admin",
@@ -246,7 +246,7 @@ func TestLogin_VersionMismatch(t *testing.T) {
 	uStore, _ := users.NewStore(ds2, dataDir)
 	hash, _ := fiberauth.HashPassword("pw")
 	_ = uStore.Create(&users.User{
-		ID: uuid.NewString(), Login: "bob", BcryptPwd: hash,
+		ID: uuid.New().String(), Login: "bob", BcryptPwd: hash,
 		QuotaBytes: 10 << 30, Role: users.RoleUser, CreatedAt: time.Now(),
 	})
 	upStore, _ := uploads.NewStore(ds2, dataDir)

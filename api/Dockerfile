@@ -22,7 +22,7 @@ RUN bun run build
 # Result lives at /src/web/dist
 
 # ── stage 2: build the Go API with the SPA embedded ───────────────────
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 ARG VERSION=dev
 WORKDIR /src
 # Deps first (cached as long as go.mod/go.sum are unchanged). We do
