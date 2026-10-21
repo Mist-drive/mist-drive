@@ -1,10 +1,10 @@
 module github.com/yann/mist-drive/api
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/creativeyann17/go-docstore v0.1.0
-	github.com/creativeyann17/go-fiber-auth v0.3.1
+	github.com/creativeyann17/go-fiber-auth v0.3.2
 	github.com/creativeyann17/go-zip v1.0.0
 	github.com/fasthttp/websocket v1.5.3
 	github.com/gofiber/fiber/v2 v2.52.14
