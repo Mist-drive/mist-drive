@@ -40,7 +40,6 @@ func main() {
 		LogLevel:    cfg.LogLevel,
 		LogPath:     cfg.LogPath,
 		SkipPaths:   []string{"/health"},
-		Compress:    true,
 	})
 
 	// One SQLite database for all document stores (users, uploads,

@@ -1,4 +1,4 @@
-import './i18n'
+import '@shared/lib/i18n'
 import React, { Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'

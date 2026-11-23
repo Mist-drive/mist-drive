@@ -218,14 +218,14 @@ func downloadObject(ctx context.Context, s3c *s3x.Client, item Item, dest string
 // replaceObject validates the ETag hasn't changed since enqueue, uploads the
 // result file, updates quota, and notifies the hub.
 func replaceObject(ctx context.Context, item Item, resultPath string, resultSize int64, contentType string, s3c *s3x.Client, quotaUpdater *users.Store, hub *events.Hub, log *logger.Logger) error {
-	_, currentETag, err := s3c.StatObjectFull(ctx, item.Bucket, item.Key)
+	current, err := s3c.Stat(ctx, item.Bucket, item.Key)
 	if err != nil {
 		log.Info("[compress] skipped key=%s reason=object_deleted", item.Key)
 		return nil
 	}
-	if currentETag != item.ETag {
+	if current.ETag != item.ETag {
 		log.Info("[compress] skipped key=%s reason=etag_changed want=%s got=%s",
-			item.Key, item.ETag, currentETag)
+			item.Key, item.ETag, current.ETag)
 		return nil
 	}
 
@@ -257,7 +257,8 @@ func replaceObject(ctx context.Context, item Item, resultPath string, resultSize
 }
 
 func processItem(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3c *s3x.Client, hub *events.Hub, tracker ProcessingTracker, quotaUpdater *users.Store, log *logger.Logger) error {
-	if hasSource, err := s3c.HasSourceMeta(ctx, item.Bucket, item.Key); err == nil && hasSource {
+	// Already server-compressed by us.
+	if info, err := s3c.Stat(ctx, item.Bucket, item.Key); err == nil && info.SourceSize > 0 {
 		log.Info("[compress] skipped key=%s reason=already_compressed", item.Key)
 		return nil
 	}

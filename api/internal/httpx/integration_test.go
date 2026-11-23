@@ -949,9 +949,9 @@ func TestIntegration_UploadEmptyFile(t *testing.T) {
 		b, _ := io.ReadAll(cResp.Body)
 		t.Fatalf("complete empty file: status=%d body=%s", cResp.StatusCode, b)
 	}
-	size, err := f.s3c.StatObject(context.Background(), f.user.Bucket(), "empty.txt")
-	if err != nil || size != 0 {
-		t.Fatalf("empty object: size=%d err=%v", size, err)
+	obj, err := f.s3c.Stat(context.Background(), f.user.Bucket(), "empty.txt")
+	if err != nil || obj.Size != 0 {
+		t.Fatalf("empty object: size=%d err=%v", obj.Size, err)
 	}
 
 	if r := f.do(t, "POST", "/api/files/upload/init", map[string]any{"key": "neg.txt", "size": -1}); r.StatusCode != 400 {

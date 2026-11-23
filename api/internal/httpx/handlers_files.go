@@ -185,18 +185,18 @@ func (s *Server) deleteFile(c *fiber.Ctx) error {
 			return s.serverError("files: delete remove objects", err)
 		}
 	} else {
-		size, err := s.S3.StatObject(c.Context(), u.Bucket(), key)
+		obj, err := s.S3.Stat(c.Context(), u.Bucket(), key)
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "not found")
 		}
 		if err := s.S3.RemoveObject(c.Context(), u.Bucket(), key); err != nil {
 			return s.serverError("files: delete remove object", err)
 		}
-		freed = size
+		freed = obj.Size
 		count = 1
 	}
 
-	// freed is already exact — it came from the same StatObject/ListObjects
+	// freed is already exact — it came from the same Stat/ListObjects
 	// call that drove the actual deletion above — so apply it as a delta
 	// instead of paying for a second full-bucket listing (recountUsedBytes)
 	// just to recompute the same number. recountUsedBytes stays reserved
@@ -394,7 +394,7 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 
 	bucket := u.Bucket()
 	// Determine if source is a file or folder; collect children for folders.
-	fileSize, statErr := s.S3.StatObject(c.Context(), bucket, oldPath)
+	src, statErr := s.S3.Stat(c.Context(), bucket, oldPath)
 	isFile := statErr == nil
 	var folderObjs []s3x.ObjectInfo
 	if !isFile {
@@ -415,7 +415,7 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 	if free := quota.DiskFree(s.Cfg.DataDir); free > 0 {
 		var copySize int64
 		if isFile {
-			copySize = fileSize
+			copySize = src.Size
 		} else {
 			copySize = sumObjectSizes(folderObjs)
 		}
@@ -427,14 +427,14 @@ func (s *Server) renameFile(c *fiber.Ctx) error {
 
 	// Collision check
 	if isFile {
-		if _, err := s.S3.StatObject(c.Context(), bucket, newPath); err == nil {
+		if _, err := s.S3.Stat(c.Context(), bucket, newPath); err == nil {
 			return fiber.NewError(fiber.StatusConflict, "a file with that name already exists")
 		}
 	} else {
 		if existing, _ := s.S3.ListObjects(c.Context(), bucket, newPath+"/"); len(existing) > 0 {
 			return fiber.NewError(fiber.StatusConflict, "a folder with that name already exists")
 		}
-		if _, err := s.S3.StatObject(c.Context(), bucket, newPath); err == nil {
+		if _, err := s.S3.Stat(c.Context(), bucket, newPath); err == nil {
 			return fiber.NewError(fiber.StatusConflict, "a file with that name already exists")
 		}
 	}

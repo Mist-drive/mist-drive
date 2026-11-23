@@ -11,7 +11,6 @@ package logger
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -23,12 +22,8 @@ import (
 type Config struct {
 	ServiceName string
 	LogLevel    string   // debug | info | warn | error
-	LogPath     string   // defaults to /app/logs/app.log
+	LogPath     string   // rotated JSON log file
 	SkipPaths   []string // paths to skip in request logging
-	MaxSizeMB   int      // max size before rotation (default 10)
-	MaxBackups  int      // max rotated files to keep (default 10)
-	MaxAgeDays  int      // max days to keep files (default 10)
-	Compress    bool     // compress rotated files (default true)
 }
 
 // Logger wraps *slog.Logger with printf-style sugar and a skip set.
@@ -45,37 +40,18 @@ func (l *Logger) Slog() *slog.Logger { return l.sl }
 // New creates a new Logger with the given config.
 // stdout -> text handler, file -> json handler, both level-filtered.
 func New(cfg Config) *Logger {
-	if cfg.LogPath == "" {
-		cfg.LogPath = "/app/logs/app.log"
-	}
-	if cfg.MaxSizeMB == 0 {
-		cfg.MaxSizeMB = 10
-	}
-	if cfg.MaxBackups == 0 {
-		cfg.MaxBackups = 10
-	}
-	if cfg.MaxAgeDays == 0 {
-		cfg.MaxAgeDays = 10
-	}
-	if cfg.SkipPaths == nil {
-		cfg.SkipPaths = []string{"/health"}
-	}
-
-	lvl := parseLevel(cfg.LogLevel)
-	hOpts := &slog.HandlerOptions{Level: lvl, AddSource: true}
-
+	hOpts := &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel), AddSource: true}
 	fileWriter := &lumberjack.Logger{
 		Filename:   cfg.LogPath,
-		MaxSize:    cfg.MaxSizeMB,
-		MaxBackups: cfg.MaxBackups,
-		MaxAge:     cfg.MaxAgeDays,
-		Compress:   cfg.Compress,
+		MaxSize:    10, // MB
+		MaxBackups: 10,
+		MaxAge:     10, // days
+		Compress:   true,
 	}
-
-	stdoutH := slog.NewTextHandler(os.Stdout, hOpts)
-	fileH := slog.NewJSONHandler(io.Writer(fileWriter), hOpts)
-	fan := &fanoutHandler{handlers: []slog.Handler{stdoutH, fileH}}
-
+	fan := slog.NewMultiHandler(
+		slog.NewTextHandler(os.Stdout, hOpts),
+		slog.NewJSONHandler(fileWriter, hOpts),
+	)
 	sl := slog.New(fan).With(slog.String("service", cfg.ServiceName))
 
 	skip := make(map[string]struct{}, len(cfg.SkipPaths))
@@ -96,44 +72,6 @@ func parseLevel(s string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
-}
-
-// --- fanout handler: dispatches each record to all sub-handlers ---
-
-type fanoutHandler struct {
-	handlers []slog.Handler
-}
-
-func (f *fanoutHandler) Enabled(ctx context.Context, lvl slog.Level) bool {
-	for _, h := range f.handlers {
-		if h.Enabled(ctx, lvl) {
-			return true
-		}
-	}
-	return false
-}
-func (f *fanoutHandler) Handle(ctx context.Context, r slog.Record) error {
-	var firstErr error
-	for _, h := range f.handlers {
-		if err := h.Handle(ctx, r.Clone()); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-func (f *fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := make([]slog.Handler, len(f.handlers))
-	for i, h := range f.handlers {
-		next[i] = h.WithAttrs(attrs)
-	}
-	return &fanoutHandler{handlers: next}
-}
-func (f *fanoutHandler) WithGroup(name string) slog.Handler {
-	next := make([]slog.Handler, len(f.handlers))
-	for i, h := range f.handlers {
-		next[i] = h.WithGroup(name)
-	}
-	return &fanoutHandler{handlers: next}
 }
 
 // --- public API ---

@@ -1,5 +1,6 @@
 api/bin
 api/tmp
+api/server
 api/.env
 web/node_modules
 web/dist

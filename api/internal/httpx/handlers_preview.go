@@ -86,11 +86,11 @@ func (s *Server) previewFile(c *fiber.Ctx) error {
 
 	switch ptype {
 	case "image":
-		size, err := s.S3.StatObject(c.Context(), u.Bucket(), key)
+		obj, err := s.S3.Stat(c.Context(), u.Bucket(), key)
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "not found")
 		}
-		if size > previewImageMax {
+		if obj.Size > previewImageMax {
 			c.Set("X-Preview-Type", "binary")
 			return c.Status(fiber.StatusOK).SendString("")
 		}

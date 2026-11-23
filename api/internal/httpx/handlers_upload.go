@@ -55,8 +55,8 @@ func (s *Server) uploadInit(c *fiber.Ctx) error {
 	// When replacing an existing file the quota check must consider only the
 	// net size change (newSize - existingSize), not the full newSize, because
 	// the old object is removed when the multipart upload completes.
-	existingSize, _ := s.S3.StatObject(c.Context(), u.Bucket(), r.Key)
-	effectiveUsed := max(int64(0), u.UsedBytes-existingSize)
+	existing, _ := s.S3.Stat(c.Context(), u.Bucket(), r.Key)
+	effectiveUsed := max(int64(0), u.UsedBytes-existing.Size)
 	if !s.Reservations.TryReserve(u.ID, r.Size, effectiveUsed, u.QuotaBytes) {
 		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "quota exceeded")
 	}
@@ -108,20 +108,20 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	}
 	// Stat the existing object before completing — CompleteMultipart
 	// atomically replaces it, so this is the only window to read the old size.
-	oldSize, _ := s.S3.StatObject(c.Context(), st.Bucket, st.Key)
+	old, _ := s.S3.Stat(c.Context(), st.Bucket, st.Key)
 	if err := s.S3.CompleteMultipart(c.Context(), st.Bucket, st.Key, st.UploadID, r.Parts); err != nil {
 		return s.serverError("upload: complete multipart", err)
 	}
-	size, etag, err := s.S3.StatObjectFull(c.Context(), st.Bucket, st.Key)
+	obj, err := s.S3.Stat(c.Context(), st.Bucket, st.Key)
 	if err == nil {
-		_ = s.Users.AddUsedBytes(u.ID, size-oldSize)
+		_ = s.Users.AddUsedBytes(u.ID, obj.Size-old.Size)
 		ext := strings.ToLower(filepath.Ext(st.Key))
 		if s.CompressQueue != nil && (ext == ".zip" || ext == ".jpg" || ext == ".jpeg") {
 			_ = s.CompressQueue.Enqueue(compress.Item{
 				Bucket:  st.Bucket,
 				Key:     st.Key,
-				Size:    size,
-				ETag:    etag,
+				Size:    obj.Size,
+				ETag:    obj.ETag,
 				AddedAt: time.Now(),
 			})
 		}
@@ -129,7 +129,7 @@ func (s *Server) uploadComplete(c *fiber.Ctx) error {
 	s.Reservations.Release(u.ID, st.Size)
 	_ = s.Uploads.Delete(u.ID, r.UploadID)
 	s.publishChange(u.ID)
-	return c.JSON(fiber.Map{"ok": true, "size": size})
+	return c.JSON(fiber.Map{"ok": true, "size": obj.Size})
 }
 
 type abortReq struct {

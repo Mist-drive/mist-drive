@@ -96,18 +96,21 @@ func (c *Client) ListObjects(ctx context.Context, bucket, prefix string) ([]Obje
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
-		var sourceSize int64
-		// MinIO returns user metadata keys in canonical HTTP form with the
-		// x-amz-meta- prefix stripped, e.g. "Mist-Source-Size". Try both
-		// forms to stay resilient across SDK/server versions.
-		if v := obj.UserMetadata["Mist-Source-Size"]; v != "" {
-			sourceSize, _ = strconv.ParseInt(v, 10, 64)
-		} else if v := obj.UserMetadata["X-Amz-Meta-Mist-Source-Size"]; v != "" {
-			sourceSize, _ = strconv.ParseInt(v, 10, 64)
-		}
-		out = append(out, ObjectInfo{Key: obj.Key, Size: obj.Size, ETag: obj.ETag, LastModified: obj.LastModified, SourceSize: sourceSize})
+		out = append(out, toObjectInfo(obj))
 	}
 	return out, nil
+}
+
+func toObjectInfo(obj minio.ObjectInfo) ObjectInfo {
+	// MinIO returns user metadata keys in canonical HTTP form with the
+	// x-amz-meta- prefix stripped, e.g. "Mist-Source-Size". Try both
+	// forms to stay resilient across SDK/server versions.
+	v := obj.UserMetadata["Mist-Source-Size"]
+	if v == "" {
+		v = obj.UserMetadata["X-Amz-Meta-Mist-Source-Size"]
+	}
+	sourceSize, _ := strconv.ParseInt(v, 10, 64)
+	return ObjectInfo{Key: obj.Key, Size: obj.Size, ETag: obj.ETag, LastModified: obj.LastModified, SourceSize: sourceSize}
 }
 
 type ObjectInfo struct {
@@ -178,33 +181,12 @@ func (c *Client) PutEmptyObject(ctx context.Context, bucket, key string) error {
 	return err
 }
 
-func (c *Client) StatObject(ctx context.Context, bucket, key string) (int64, error) {
+func (c *Client) Stat(ctx context.Context, bucket, key string) (ObjectInfo, error) {
 	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
 	if err != nil {
-		return 0, err
+		return ObjectInfo{}, err
 	}
-	return info.Size, nil
-}
-
-// HasSourceMeta returns true when the object carries the mist-source-size user
-// metadata key, which means it was already server-compressed by us.
-func (c *Client) HasSourceMeta(ctx context.Context, bucket, key string) (bool, error) {
-	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
-	if err != nil {
-		return false, err
-	}
-	return info.UserMetadata["Mist-Source-Size"] != "" ||
-		info.UserMetadata["X-Amz-Meta-Mist-Source-Size"] != "", nil
-}
-
-// StatObjectFull returns size and ETag. Used by the compress pipeline to detect
-// if an object was replaced between enqueue and the replace step.
-func (c *Client) StatObjectFull(ctx context.Context, bucket, key string) (int64, string, error) {
-	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
-	if err != nil {
-		return 0, "", err
-	}
-	return info.Size, info.ETag, nil
+	return toObjectInfo(info), nil
 }
 
 func (c *Client) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string, meta map[string]string) error {

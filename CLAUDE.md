@@ -48,7 +48,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 - Vite + Bun + React + TypeScript. No component library.
 - `src/lib/api.ts` — typed API client, session management, reconnecting WebSocket client. `fetchHealth()` hits `/health` unauthenticated and returns `{version, features}`. 401 responses auto-redirect to `/login` after clearing the session.
 - `src/lib/uploader.ts` — multipart upload with presigned URLs, 8 MiB parts, 4 concurrent PUT workers, abort support.
-- `src/i18n.ts` — i18next init with HTTP backend; loads `/locales/{{lng}}.json` at runtime (not bundled). `web/public/locales` is a symlink → `../../shared/locales`; Vite copies it into `dist/locales/` at build time so the Go embed picks it up.
+- i18n init lives in `shared/lib/i18n.ts` (imported first in `main.tsx`); `en.json` is bundled, not fetched, so no stale fixed-name locale file in browser cache.
 - Pages: `Login.tsx`, `Files.tsx`, `Admin.tsx`, `Settings.tsx`.
 
 ### Desktop (`desktop/`)
@@ -82,7 +82,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 - **Desktop login flow**: `Login()` must bounce the sync engine (`Stop` → `SetAPI` → `ClearStatus` → `Start`) so it picks up the fresh token and clears stale errors.
 - **Rename disk check**: `renameFile` calls `quota.DiskFree(cfg.DataDir)` before spawning the copy goroutine; rejects with `507` if `copySize + 1 GiB > free`. Rename is copy+delete (no S3 atomic rename), so it needs ~2× file size free temporarily.
 - **Shared code** (`shared/`): components and libs used by both web and desktop via `@shared` Vite/TS alias. Key exports: `LoadingBar`, `LoginCard`, `Logo`, `UploadCard`, `UploadProgressPanel`, `ReplaceDialog`, `PreviewContent`, `StorageStats`; libs: `format`, `tree`, `upload`, `loading`, `i18n`.
-- **i18n** (`shared/locales/en.json`): single source of truth for all UI strings. Web lazy-loads via HTTP (`/locales/en.json`); desktop bundles statically via `import en from '@shared/locales/en.json'`. Both Vite configs set `resolve.dedupe: ['i18next', 'react-i18next']` to prevent dual-instance issues when resolving through the `@shared` alias. `shared/lib/i18n.ts` re-exports `useTranslation`/`Trans` — shared components always import from there, never directly from `react-i18next`. Run `python3 check_i18n.py` from repo root to audit missing/unused keys.
+- **i18n** (`shared/locales/en.json`): single source of truth for all UI strings. Both web and desktop bundle it via the single init in `shared/lib/i18n.ts`. Both Vite configs set `resolve.dedupe: ['i18next', 'react-i18next']` to prevent dual-instance issues when resolving through the `@shared` alias. `shared/lib/i18n.ts` inits i18next and re-exports `useTranslation`/`Trans` — shared components always import from there, never directly from `react-i18next`. Run `python3 check_i18n.py` from repo root to audit missing/unused keys.
 - **Data dirs**: `DATA_DIR` defaults to `./data` (relative to where the binary runs). In dev (`make dev-api`), `api/.env` sets `DATA_DIR=../data/api` so data lands in `data/api/` at the repo root, not inside `api/`. Docker uses the default `./data` which resolves to `/app/data` inside the container (WORKDIR `/app`). `LOG_PATH` follows the same pattern.
 - **`dev-api` env**: `DATA_DIR` and `LOG_PATH` are written into `api/.env` on first run by the Makefile and sourced via `set -a && . ./.env`. The `.air.toml` `[env]` section is unreliable across air versions — env vars go in `.env` instead.
 - **Trusted device tokens**: cookie value is `{uuid}:{32-byte-hex}`; server stores `SHA-256({32-byte-hex})` — never the plain token. Lookup: split on `:`, find device by UUID, hash the token half, compare. `pruneExpiredDevices` called on every registration to keep the slice clean. Cookie is httpOnly + SameSite=Strict, 30-day MaxAge.
@@ -134,7 +134,7 @@ Wails bindings regen: `cd desktop && wails generate module`
 - ~~**Version in UI**~~ — `/health` exposes `version`; shown in navbar (web) and header bar (desktop); both login pages display it below the logo
 - ~~**CE/Pro feature flags**~~ — `api/internal/features/` package; `ce.go` (`!pro` tag) ships in public repo with all flags false; `pro.go` (`pro` tag) lives in private repo only; `/health` returns `features` object; web reads via `fetchHealth()`, desktop via `GetFeatures()` Wails binding
 - ~~**401 auto-redirect**~~ — web: `req()` and `previewFile()` detect 401 → `clearSession()` + `window.location.replace('/login')`; desktop: `session.ts` pub/sub, `is401()` helper, `notifySessionExpired()` called in `Files.tsx`/`Home.tsx` catch blocks
-- ~~**i18n**~~ — i18next + react-i18next; `shared/locales/en.json` single source of truth; web lazy-loads via HTTP backend (not bundled); desktop bundles via static JSON import; `resolve.dedupe` in both Vite configs prevents dual-instance `NO_I18NEXT_INSTANCE` error in production builds
+- ~~**i18n**~~ — i18next + react-i18next; `shared/locales/en.json` single source of truth, bundled into both apps by `shared/lib/i18n.ts`; `resolve.dedupe` in both Vite configs prevents dual-instance `NO_I18NEXT_INSTANCE` error in production builds
 
 ## MinIO KMS / Encryption — Options Under Consideration
 

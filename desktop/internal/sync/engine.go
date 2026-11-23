@@ -26,8 +26,10 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -495,7 +497,9 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 	// only re-examining files fsnotify actually touched. For the
 	// current size of projects we sync, a full compare is fine.
 	seen := map[string]bool{}
-	for rel, lf := range local {
+	// Sorted so uploads (and the pass notification naming the first file) are deterministic.
+	for _, rel := range slices.Sorted(maps.Keys(local)) {
+		lf := local[rel]
 		seen[rel] = true
 		if ctx.Err() != nil || e.st.Generation() != gen {
 			return
@@ -518,7 +522,7 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 		}
 		e.bumpSkipped()
 	}
-	for rel := range remote {
+	for _, rel := range slices.Sorted(maps.Keys(remote)) {
 		if seen[rel] {
 			continue
 		}
