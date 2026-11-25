@@ -11,8 +11,9 @@ if [ -n "$staged_go" ]; then
     printf '%s' "$staged_go" | xargs -0 git add
 fi
 
-echo "Running go vet + tests..."
-if ! (cd api && go vet ./... && go test ./... -count=1); then
+echo "Running go vet + lint + tests..."
+# Lint only issues introduced since HEAD so legacy findings don't block commits.
+if ! (cd api && go vet ./... && golangci-lint run --new-from-rev=HEAD ./... && go test ./... -count=1); then
     echo ""
     echo "✗ Checks failed. Fix issues above before committing."
     exit 1

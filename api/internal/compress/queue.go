@@ -34,7 +34,7 @@ const queueDoc = "queue"
 func NewQueue(ds *docstore.Store, legacyPath string) (*Queue, error) {
 	c, err := ds.Collection("compress")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open compress collection: %w", err)
 	}
 	q := &Queue{c: c}
 
@@ -42,10 +42,10 @@ func NewQueue(ds *docstore.Store, legacyPath string) (*Queue, error) {
 	var items []Item
 	if err := c.Get(queueDoc, &items); errors.Is(err, docstore.ErrNotFound) {
 		if err := c.Put(queueDoc, []Item{}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("init compress queue: %w", err)
 		}
 	} else if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load compress queue: %w", err)
 	}
 
 	if err := q.migrateLegacy(legacyPath); err != nil {
@@ -71,7 +71,7 @@ func (q *Queue) migrateLegacy(legacyPath string) error {
 	}
 	if len(legacy) > 0 {
 		if err := q.c.Put(queueDoc, legacy); err != nil {
-			return err
+			return fmt.Errorf("import legacy compress queue: %w", err)
 		}
 	}
 	if err := os.Rename(legacyPath, legacyPath+".pre-sqlite"); err != nil {
@@ -82,14 +82,18 @@ func (q *Queue) migrateLegacy(legacyPath string) error {
 }
 
 func (q *Queue) Enqueue(item Item) error {
-	return q.c.Update(queueDoc, func(raw []byte) ([]byte, error) {
+	err := q.c.Update(queueDoc, func(raw []byte) ([]byte, error) {
 		var items []Item
 		if err := json.Unmarshal(raw, &items); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode compress queue: %w", err)
 		}
 		items = append(items, item)
 		return json.Marshal(items)
 	})
+	if err != nil {
+		return fmt.Errorf("enqueue %s: %w", item.Key, err)
+	}
+	return nil
 }
 
 func (q *Queue) Dequeue() (*Item, error) {
@@ -97,7 +101,7 @@ func (q *Queue) Dequeue() (*Item, error) {
 	err := q.c.Update(queueDoc, func(raw []byte) ([]byte, error) {
 		var items []Item
 		if err := json.Unmarshal(raw, &items); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode compress queue: %w", err)
 		}
 		if len(items) == 0 {
 			out = nil
@@ -107,7 +111,7 @@ func (q *Queue) Dequeue() (*Item, error) {
 		return json.Marshal(items[1:])
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dequeue: %w", err)
 	}
 	return out, nil
 }

@@ -1,0 +1,51 @@
+# Shared by api/ and desktop/ (golangci-lint walks up to find it).
+version: "2"
+
+run:
+  build-tags: [webkit2_41]
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - errorlint # %v on errors, == instead of errors.Is
+    - wrapcheck # bare `return err` from other packages
+    - exhaustive # switch on const enums
+    - nilerr
+    - nilnil
+    - forcetypeassert
+    - bodyclose
+    - gosec
+  settings:
+    govet:
+      enable: [nilness]
+    exhaustive:
+      default-signifies-exhaustive: true
+    wrapcheck:
+      # Self-describing errors (PathError/LinkError/url.Error carry op + path), wrapping only stutters.
+      extra-ignore-sigs:
+        - os.
+        - path/filepath.
+        - net/url.Parse(
+        - io/fs.Sub(
+        - (*net/http.Client).Do( # *url.Error carries method + URL
+        - net/http.NewRequest
+        - (io.Reader).Read( # io.EOF must stay unwrapped, callers compare with ==
+        - (context.Context).Err()
+      ignore-package-globs:
+        - github.com/wailsapp/* # dialog errors go straight to the frontend
+        - github.com/gofiber/* # handler returns (c.JSON, fiber.NewError) are responses, not failures
+        - github.com/yann/mist-drive/* # own packages already wrap
+        - mist-drive-desktop/*
+    gosec:
+      excludes:
+        - G104 # duplicate of errcheck
+        - G301 # 0755 dirs are intended
+        - G304 # paths are server/app controlled
+        - G117 # login/settings structs legitimately carry secrets
+  exclusions:
+    presets: [std-error-handling]
+    rules:
+      - path: _test\.go
+        linters: [wrapcheck, forcetypeassert, gosec, errcheck, bodyclose]
+      - path: desktopentry # paths from $HOME/XDG env + fixed gio/update-desktop-database calls
+        linters: [gosec]

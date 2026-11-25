@@ -545,7 +545,7 @@ func (a *App) PickFolderForUpload(remotePrefix string) ([]LocalFile, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return fmt.Errorf("stat %s: %w", path, err)
 		}
 		rel, _ := filepath.Rel(dir, path)
 		files = append(files, LocalFile{Key: prefix + filepath.ToSlash(rel), Size: info.Size()})

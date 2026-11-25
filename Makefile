@@ -4,7 +4,7 @@ VERSION ?= dev
 # make appimage LDFLAGS="-s -w -X main.version=1.2.3 -X main.commit=abc1234").
 LDFLAGS ?= -X main.version=$(VERSION)
 
-.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build appimage db-web run stop test test-unit test-integration fmt check install-hooks clean
+.PHONY: help install install-data build dev-api dev-ui dev-desktop desktop-build appimage db-web run stop test test-unit test-integration fmt check lint install-hooks clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -12,6 +12,7 @@ help:
 install: ## install deps for api + web + desktop
 	go install github.com/wailsapp/wails/v2/cmd/wails@latest
 	go install github.com/air-verse/air@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 	go install github.com/creativeyann17/go-docstore/cmd/godocstore@latest
 	cd api && go mod download
 	cd web && bun install
@@ -100,10 +101,21 @@ stop: ## stop all docker compose services
 fmt: ## gofmt the api module
 	cd api && gofmt -w .
 
-check: ## gofmt check + go vet + race tests on the api module (pre-commit gate)
-	@fmtout=$$(cd api && gofmt -l .); if [ -n "$$fmtout" ]; then echo "✗ needs gofmt:"; echo "$$fmtout"; exit 1; fi
+check: ## CI gate: gofmt + vet + race tests + lint (api + desktop)
+	@fmtout=$$(gofmt -l api desktop/*.go desktop/internal); if [ -n "$$fmtout" ]; then echo "✗ needs gofmt:"; echo "$$fmtout"; exit 1; fi
 	cd api && go vet ./...
 	cd api && go test -race ./... -count=1
+	cd desktop && go vet ./internal/...
+	cd desktop && go test -race ./internal/... -count=1
+	$(MAKE) lint
+
+lint: ## static analysis: golangci-lint + nilaway + govulncheck (api + desktop)
+	cd api && golangci-lint run ./...
+	cd desktop && golangci-lint run ./...
+	cd api && go run go.uber.org/nilaway/cmd/nilaway@latest -test=false -include-pkgs=github.com/yann/mist-drive ./...
+	cd desktop && go run go.uber.org/nilaway/cmd/nilaway@latest -test=false -include-pkgs=mist-drive-desktop -tags webkit2_41 ./...
+	cd api && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	cd desktop && go run golang.org/x/vuln/cmd/govulncheck@latest -tags webkit2_41 ./...
 
 install-hooks: ## install the pre-commit hook (gofmt staged .go files + vet + tests on api)
 	cp hooks/pre-commit .git/hooks/pre-commit

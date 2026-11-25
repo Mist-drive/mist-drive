@@ -173,8 +173,8 @@ var callTimeout = 30 * time.Second
 // New builds a client against the given base URL. Certificates are
 // verified except on loopback hosts (local self-signed dev certs).
 func New(baseURL, token, version string) *Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: IsLoopbackURL(baseURL)}
+	tr := http.DefaultTransport.(*http.Transport).Clone()                        //nolint:forcetypeassert // stdlib guarantees *http.Transport
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: IsLoopbackURL(baseURL)} //nolint:gosec // G402: loopback only (local self-signed dev certs)
 	// Bounds time-to-first-byte only, never the body: a dead server is
 	// still caught, a long transfer is not.
 	tr.ResponseHeaderTimeout = callTimeout
@@ -263,7 +263,7 @@ func (c *Client) refresh(stale string) bool {
 	}
 	req.Header.Set("X-Client", "desktop")
 	req.Header.Set("User-Agent", "Mist Drive Desktop/"+c.version)
-	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie})
+	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie}) //nolint:gosec // G124: outgoing request cookie, attributes don't apply
 	res, err := c.http.Do(req)
 	if err != nil {
 		return false
@@ -334,7 +334,9 @@ func (c *Client) do(method, path string, body any, out any) error {
 		return fmt.Errorf("%d: %s", res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	if out != nil {
-		return json.NewDecoder(res.Body).Decode(out)
+		if err := json.NewDecoder(res.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode %s %s response: %w", method, path, err)
+		}
 	}
 	return nil
 }
@@ -351,7 +353,7 @@ func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (L
 		Refresh:        true,
 	})
 	if err != nil {
-		return LoginResult{}, err
+		return LoginResult{}, fmt.Errorf("encode login request: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
@@ -376,7 +378,7 @@ func (c *Client) Login(login, password, totpCode string, rememberDevice bool) (L
 	}
 	var r LoginResult
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return LoginResult{}, err
+		return LoginResult{}, fmt.Errorf("decode login response: %w", err)
 	}
 	if r.TotpRequired {
 		return r, nil
@@ -410,7 +412,7 @@ func (c *Client) Logout() {
 		return
 	}
 	req.Header.Set("X-Client", "desktop")
-	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie})
+	req.AddCookie(&http.Cookie{Name: "mist_rt", Value: cookie}) //nolint:gosec // G124: outgoing request cookie, attributes don't apply
 	if res, err := c.http.Do(req); err == nil {
 		res.Body.Close()
 	}
@@ -535,8 +537,10 @@ func (c *Client) DownloadFile(key, destPath string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, res.Body)
-	return err
+	if _, err := io.Copy(f, res.Body); err != nil {
+		return fmt.Errorf("download %s: %w", key, err)
+	}
+	return nil
 }
 
 // DownloadFolder streams the API's zip endpoint for `prefix` directly
@@ -562,8 +566,10 @@ func (c *Client) DownloadFolder(prefix, destPath string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, res.Body)
-	return err
+	if _, err := io.Copy(f, res.Body); err != nil {
+		return fmt.Errorf("download folder %s: %w", prefix, err)
+	}
+	return nil
 }
 
 // PreviewResult is returned by PreviewFile. Type is "image", "text", or "binary".
@@ -596,13 +602,13 @@ func (c *Client) PreviewFile(key string) (PreviewResult, error) {
 	case "image":
 		data, err := io.ReadAll(res.Body)
 		if err != nil {
-			return PreviewResult{}, err
+			return PreviewResult{}, fmt.Errorf("read image preview: %w", err)
 		}
 		return PreviewResult{Type: "image", Content: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)}, nil
 	case "text":
 		data, err := io.ReadAll(res.Body)
 		if err != nil {
-			return PreviewResult{}, err
+			return PreviewResult{}, fmt.Errorf("read text preview: %w", err)
 		}
 		return PreviewResult{Type: "text", Content: string(data)}, nil
 	default:

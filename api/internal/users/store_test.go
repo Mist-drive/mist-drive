@@ -2,6 +2,7 @@ package users
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ func TestStore_CRUD(t *testing.T) {
 	if err := s.Create(u); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := s.Create(u); err != ErrExists {
+	if err := s.Create(u); !errors.Is(err, ErrExists) {
 		t.Fatalf("duplicate create: want ErrExists, got %v", err)
 	}
 
@@ -80,10 +81,10 @@ func TestStore_CRUD(t *testing.T) {
 	if err := s.Delete("id1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetByID("id1"); err != ErrNotFound {
+	if _, err := s.GetByID("id1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("after delete: want ErrNotFound, got %v", err)
 	}
-	if _, err := s.GetByLogin("alice"); err != ErrNotFound {
+	if _, err := s.GetByLogin("alice"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("login index not cleared: %v", err)
 	}
 }
@@ -279,7 +280,7 @@ func TestStore_ListReturnsAllUsers(t *testing.T) {
 func TestStore_GetByIDNotFound(t *testing.T) {
 	s, _ := newTestStore(t)
 	_, err := s.GetByID("nope")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetByID(unknown) = %v, want ErrNotFound", err)
 	}
 }

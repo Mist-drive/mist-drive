@@ -11,5 +11,5 @@ func DiskFree(path string) int64 {
 		return 0
 	}
 	// Bavail = blocks available to unprivileged user.
-	return int64(s.Bavail) * int64(s.Bsize)
+	return int64(s.Bavail) * int64(s.Bsize) //nolint:gosec // G115: free bytes never reach 2^63
 }

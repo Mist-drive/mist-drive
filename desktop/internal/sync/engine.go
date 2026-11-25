@@ -149,10 +149,10 @@ func (e *Engine) notifyErrOnce(key, title, body string) {
 // collapse to a count (with one example name so the toast still shows
 // something concrete).
 func syncSummary(up, down []string) string {
-	if len(up)+len(down) == 1 {
-		if len(up) == 1 {
-			return "Uploaded " + up[0]
-		}
+	if len(up) == 1 && len(down) == 0 {
+		return "Uploaded " + up[0]
+	}
+	if len(down) == 1 && len(up) == 0 {
 		return "Downloaded " + down[0]
 	}
 	switch {
@@ -160,8 +160,10 @@ func syncSummary(up, down []string) string {
 		return fmt.Sprintf("Synced %d files (↑%d ↓%d)", len(up)+len(down), len(up), len(down))
 	case len(up) > 0:
 		return fmt.Sprintf("Uploaded %s +%d more", up[0], len(up)-1)
-	default:
+	case len(down) > 0:
 		return fmt.Sprintf("Downloaded %s +%d more", down[0], len(down)-1)
+	default:
+		return ""
 	}
 }
 
@@ -347,7 +349,7 @@ func (e *Engine) syncWatchers(w *fsnotify.Watcher, watched map[string]bool) {
 		}
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d == nil {
-				return nil
+				return nil //nolint:nilerr // best-effort watch, skip unreadable dirs
 			}
 			if d.IsDir() {
 				_ = w.Add(p)
@@ -451,7 +453,7 @@ func scanLocal(root string) (map[string]localFile, error) {
 		rel = filepath.ToSlash(rel)
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return fmt.Errorf("stat %s: %w", p, err)
 		}
 		out[rel] = localFile{relPath: rel, size: info.Size()}
 		return nil

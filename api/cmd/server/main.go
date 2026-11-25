@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -183,7 +184,7 @@ func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
 	if err != nil {
 		hash, err := fiberauth.HashPassword(cfg.AdminPassword)
 		if err != nil {
-			return err
+			return fmt.Errorf("hash admin password: %w", err)
 		}
 		id := uuid.New().String()
 		u := &users.User{
@@ -203,7 +204,7 @@ func bootstrapAdmin(cfg *config.Config, s *users.Store, s3c *s3x.Client) error {
 	}
 	hash, err := fiberauth.HashPassword(cfg.AdminPassword)
 	if err != nil {
-		return err
+		return fmt.Errorf("hash admin password: %w", err)
 	}
 	u.BcryptPwd = hash
 	u.TokenVersion++

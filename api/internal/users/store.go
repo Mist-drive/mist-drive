@@ -34,7 +34,7 @@ func NewStore(ds *docstore.Store, dataDir string) (*Store, error) {
 		docstore.WithIndex("email", "$.email", true),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open users collection: %w", err)
 	}
 	s := &Store{c: c}
 	if err := s.migrateLegacy(dataDir); err != nil {
@@ -52,8 +52,10 @@ func (s *Store) migrateLegacy(dataDir string) error {
 	if _, err := os.Stat(legacy); os.IsNotExist(err) {
 		return nil
 	}
-	if n, err := s.c.Count(); err != nil || n > 0 {
-		return err
+	if n, err := s.c.Count(); err != nil {
+		return fmt.Errorf("count users: %w", err)
+	} else if n > 0 {
+		return nil
 	}
 
 	entries, err := os.ReadDir(legacy)
@@ -89,7 +91,10 @@ func (s *Store) migrateLegacy(dataDir string) error {
 // index — a concurrent duplicate signup loses with ErrExists, no global
 // lock needed.
 func (s *Store) Create(u *User) error {
-	return s.c.Insert(u.ID, u)
+	if err := s.c.Insert(u.ID, u); err != nil {
+		return fmt.Errorf("create user %s: %w", u.Login, err)
+	}
+	return nil
 }
 
 // AddUsedBytes atomically adds delta (which may be negative) to the
@@ -98,10 +103,10 @@ func (s *Store) Create(u *User) error {
 // clobber the total. Clamps at zero on over-subtract (defensive: we'd
 // rather show 0 than a negative number if accounting slips).
 func (s *Store) AddUsedBytes(id string, delta int64) error {
-	return s.c.Update(id, func(raw []byte) ([]byte, error) {
+	err := s.c.Update(id, func(raw []byte) ([]byte, error) {
 		var u User
 		if err := json.Unmarshal(raw, &u); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode user: %w", err)
 		}
 		u.UsedBytes += delta
 		if u.UsedBytes < 0 {
@@ -109,6 +114,10 @@ func (s *Store) AddUsedBytes(id string, delta int64) error {
 		}
 		return json.Marshal(&u)
 	})
+	if err != nil {
+		return fmt.Errorf("add used bytes for user %s: %w", id, err)
+	}
+	return nil
 }
 
 // SetUsedBytes overwrites UsedBytes with an authoritative value (e.g.
@@ -118,14 +127,18 @@ func (s *Store) SetUsedBytes(id string, v int64) error {
 	if v < 0 {
 		v = 0
 	}
-	return s.c.Update(id, func(raw []byte) ([]byte, error) {
+	err := s.c.Update(id, func(raw []byte) ([]byte, error) {
 		var u User
 		if err := json.Unmarshal(raw, &u); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode user: %w", err)
 		}
 		u.UsedBytes = v
 		return json.Marshal(&u)
 	})
+	if err != nil {
+		return fmt.Errorf("set used bytes for user %s: %w", id, err)
+	}
+	return nil
 }
 
 // Update persists the given user record. Callers fetch via GetByID,
@@ -135,24 +148,31 @@ func (s *Store) SetUsedBytes(id string, v int64) error {
 // UsedBytes, so the live value always wins over the caller's snapshot;
 // the transaction makes the merge atomic.
 func (s *Store) Update(u *User) error {
-	return s.c.Update(u.ID, func(raw []byte) ([]byte, error) {
+	err := s.c.Update(u.ID, func(raw []byte) ([]byte, error) {
 		var current User
 		if err := json.Unmarshal(raw, &current); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode user: %w", err)
 		}
 		u.UsedBytes = current.UsedBytes
 		return json.Marshal(u)
 	})
+	if err != nil {
+		return fmt.Errorf("update user %s: %w", u.ID, err)
+	}
+	return nil
 }
 
 func (s *Store) Delete(id string) error {
-	return s.c.Delete(id)
+	if err := s.c.Delete(id); err != nil {
+		return fmt.Errorf("delete user %s: %w", id, err)
+	}
+	return nil
 }
 
 func (s *Store) GetByID(id string) (*User, error) {
 	var u User
 	if err := s.c.Get(id, &u); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get user %s: %w", id, err)
 	}
 	return &u, nil
 }
@@ -160,7 +180,7 @@ func (s *Store) GetByID(id string) (*User, error) {
 func (s *Store) GetByLogin(login string) (*User, error) {
 	var u User
 	if err := s.c.GetBy("login", login, &u); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get user by login %s: %w", login, err)
 	}
 	return &u, nil
 }

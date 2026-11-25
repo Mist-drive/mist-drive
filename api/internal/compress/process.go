@@ -321,7 +321,7 @@ func processZIP(ctx context.Context, item Item, cfg *config.Config, q *Queue, s3
 		}
 		return fmt.Errorf("extract: %d error(s)", len(decResult.Errors))
 	}
-	decompressedSize := int64(decResult.DecompressedSize)
+	decompressedSize := int64(decResult.DecompressedSize) //nolint:gosec // G115: file sizes never reach 2^63
 	log.Debug("[compress] extracted key=%s decompressed=%s", item.Key, formatBytes(decompressedSize))
 
 	free2 := quota.DiskFree(cfg.DataDir)
@@ -471,7 +471,7 @@ func processJPEG(ctx context.Context, item Item, cfg *config.Config, s3c *s3x.Cl
 func validateZip(path string) error {
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("open zip %s: %w", path, err)
 	}
 	r.Close()
 	return nil

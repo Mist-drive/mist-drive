@@ -124,7 +124,7 @@ func (s *Server) login(c *fiber.Ctx) error {
 	}
 	tok, err := fiberauth.Issue(s.Cfg.JWTSecret, u.ID, []string{string(u.Role)}, u.TokenVersion, ttl)
 	if err != nil {
-		return err
+		return s.serverError("auth: issue token", err)
 	}
 	return c.JSON(loginResp{Token: tok, User: u.Public(), SessionID: sid})
 }
@@ -216,7 +216,7 @@ func (s *Server) changePassword(c *fiber.Ctx) error {
 	}
 	hash, err := fiberauth.HashPassword(r.NewPassword)
 	if err != nil {
-		return err
+		return s.serverError("auth: hash new password", err)
 	}
 	u.BcryptPwd = hash
 	// A password change must evict whoever else holds a session.

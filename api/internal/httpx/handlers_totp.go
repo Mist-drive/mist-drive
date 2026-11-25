@@ -34,7 +34,7 @@ func (s *Server) totpSetup(c *fiber.Ctx) error {
 	}
 	secret, uri, err := fiberauth.GenerateTOTPSecret(fiberauth.TOTPConfig{Issuer: issuer}, u.Login)
 	if err != nil {
-		return err
+		return s.serverError("totp: generate secret", err)
 	}
 	return c.JSON(fiber.Map{
 		"secret": secret,
@@ -73,7 +73,7 @@ func (s *Server) totpEnable(c *fiber.Ctx) error {
 	}
 	plain, hashed, err := fiberauth.GenerateBackupCodes(backupCodeCount)
 	if err != nil {
-		return err
+		return s.serverError("totp: generate backup codes", err)
 	}
 	u.TOTPSecret = r.Secret
 	u.TOTPEnabled = true
@@ -147,7 +147,7 @@ func (s *Server) totpRegenBackup(c *fiber.Ctx) error {
 	}
 	plain, hashed, err := fiberauth.GenerateBackupCodes(backupCodeCount)
 	if err != nil {
-		return err
+		return s.serverError("totp: generate backup codes", err)
 	}
 	u.TOTPBackupCodes = hashed
 	if err := s.Users.Update(u); err != nil {

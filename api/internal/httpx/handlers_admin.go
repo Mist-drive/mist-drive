@@ -74,7 +74,7 @@ func (s *Server) adminCreateUser(c *fiber.Ctx) error {
 	}
 	hash, err := fiberauth.HashPassword(r.Password)
 	if err != nil {
-		return err
+		return s.serverError("admin: hash password", err)
 	}
 	id := uuid.New().String()
 	u := &users.User{

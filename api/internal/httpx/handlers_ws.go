@@ -71,7 +71,7 @@ func (s *Server) authenticateWS(c *websocket.Conn) (uid string, ok bool) {
 	if err != nil || claims.Purpose != "" {
 		return "", false
 	}
-	if claims.IssuedAt == nil || claims.IssuedAt.Time.Before(s.bootTime) {
+	if claims.IssuedAt == nil || claims.IssuedAt.Before(s.bootTime) {
 		return "", false
 	}
 	u, err := s.Users.GetByID(claims.UID)

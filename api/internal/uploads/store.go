@@ -2,6 +2,7 @@ package uploads
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ type Store struct {
 func NewStore(ds *docstore.Store, dataDir string) (*Store, error) {
 	c, err := ds.Collection("uploads")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open uploads collection: %w", err)
 	}
 	s := &Store{c: c}
 	if err := s.migrateLegacy(dataDir); err != nil {
@@ -49,22 +50,25 @@ func (s *Store) migrateLegacy(dataDir string) error {
 	if _, err := os.Stat(legacy); os.IsNotExist(err) {
 		return nil
 	}
-	if n, err := s.c.Count(); err != nil || n > 0 {
-		return err
+	if n, err := s.c.Count(); err != nil {
+		return fmt.Errorf("count uploads: %w", err)
+	} else if n > 0 {
+		return nil
 	}
 
 	imported := 0
-	filepath.Walk(legacy, func(path string, info os.FileInfo, err error) error {
+	// Best-effort: unreadable entries are skipped, never abort the walk.
+	_ = filepath.Walk(legacy, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
-			return nil
+			return nil //nolint:nilerr // skip unreadable entry
 		}
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(path) //nolint:gosec // G122: one-shot local migration of our own data dir
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // skip unreadable file
 		}
 		var st State
 		if json.Unmarshal(b, &st) != nil {
-			return nil
+			return nil //nolint:nilerr // skip corrupt file
 		}
 		if s.c.Put(key(st.UserID, st.UploadID), &st) == nil {
 			imported++
@@ -81,19 +85,25 @@ func (s *Store) migrateLegacy(dataDir string) error {
 func key(uid, uploadID string) string { return uid + "/" + uploadID }
 
 func (s *Store) Save(st *State) error {
-	return s.c.Put(key(st.UserID, st.UploadID), st)
+	if err := s.c.Put(key(st.UserID, st.UploadID), st); err != nil {
+		return fmt.Errorf("save upload %s: %w", st.UploadID, err)
+	}
+	return nil
 }
 
 func (s *Store) Get(uid, uploadID string) (*State, error) {
 	var st State
 	if err := s.c.Get(key(uid, uploadID), &st); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get upload %s: %w", uploadID, err)
 	}
 	return &st, nil
 }
 
 func (s *Store) Delete(uid, uploadID string) error {
-	return s.c.Delete(key(uid, uploadID))
+	if err := s.c.Delete(key(uid, uploadID)); err != nil {
+		return fmt.Errorf("delete upload %s: %w", uploadID, err)
+	}
+	return nil
 }
 
 // WalkAll returns all persisted upload states.
@@ -106,5 +116,8 @@ func (s *Store) WalkAll() ([]*State, error) {
 		}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, fmt.Errorf("walk uploads: %w", err)
+	}
+	return out, nil
 }

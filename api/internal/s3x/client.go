@@ -38,7 +38,7 @@ func New(endpoint, access, secret string, useSSL bool, publicHost string) (*Clie
 		Region: region,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create s3 client %s: %w", endpoint, err)
 	}
 	presign := mc
 	if publicHost != "" && publicHost != endpoint {
@@ -52,7 +52,7 @@ func New(endpoint, access, secret string, useSSL bool, publicHost string) (*Clie
 			Region: region,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("create s3 presign client %s: %w", publicHost, err)
 		}
 		presign = pc
 	}
@@ -71,10 +71,12 @@ func isLocalHost(hp string) bool {
 func (c *Client) EnsureBucket(ctx context.Context, bucket string) error {
 	ok, err := c.mc.BucketExists(ctx, bucket)
 	if err != nil {
-		return err
+		return fmt.Errorf("check bucket %s: %w", bucket, err)
 	}
 	if !ok {
-		return c.mc.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+		if err := c.mc.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+			return fmt.Errorf("create bucket %s: %w", bucket, err)
+		}
 	}
 	return nil
 }
@@ -87,7 +89,10 @@ func (c *Client) RemoveBucket(ctx context.Context, bucket string) error {
 		}
 		_ = c.mc.RemoveObject(ctx, bucket, obj.Key, minio.RemoveObjectOptions{})
 	}
-	return c.mc.RemoveBucket(ctx, bucket)
+	if err := c.mc.RemoveBucket(ctx, bucket); err != nil {
+		return fmt.Errorf("remove bucket %s: %w", bucket, err)
+	}
+	return nil
 }
 
 func (c *Client) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectInfo, error) {
@@ -124,13 +129,16 @@ type ObjectInfo struct {
 func (c *Client) PresignGet(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
 	u, err := c.presign.PresignedGetObject(ctx, bucket, key, ttl, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("presign get %s: %w", key, err)
 	}
 	return u.String(), nil
 }
 
 func (c *Client) RemoveObject(ctx context.Context, bucket, key string) error {
-	return c.mc.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+	if err := c.mc.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("remove object %s: %w", key, err)
+	}
+	return nil
 }
 
 // RemoveObjects deletes every key in `keys` from `bucket` using MinIO's
@@ -164,41 +172,55 @@ func (c *Client) RemoveObjects(ctx context.Context, bucket string, keys []string
 func (c *Client) GetObjectRange(ctx context.Context, bucket, key string, start, end int64) (io.ReadCloser, error) {
 	opts := minio.GetObjectOptions{}
 	if err := opts.SetRange(start, end); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("set range %d-%d: %w", start, end, err)
 	}
-	return c.mc.GetObject(ctx, bucket, key, opts)
+	obj, err := c.mc.GetObject(ctx, bucket, key, opts)
+	if err != nil {
+		return nil, fmt.Errorf("get object range %s: %w", key, err)
+	}
+	return obj, nil
 }
 
 // GetObject returns a streaming reader for the object. Caller must Close.
 // Used by the folder-zip handler; presigned GET is still preferred for
 // single-file downloads.
 func (c *Client) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	return c.mc.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	obj, err := c.mc.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get object %s: %w", key, err)
+	}
+	return obj, nil
 }
 
 func (c *Client) PutEmptyObject(ctx context.Context, bucket, key string) error {
-	_, err := c.mc.PutObject(ctx, bucket, key, bytes.NewReader([]byte{}), 0, minio.PutObjectOptions{})
-	return err
+	if _, err := c.mc.PutObject(ctx, bucket, key, bytes.NewReader([]byte{}), 0, minio.PutObjectOptions{}); err != nil {
+		return fmt.Errorf("put empty object %s: %w", key, err)
+	}
+	return nil
 }
 
 func (c *Client) Stat(ctx context.Context, bucket, key string) (ObjectInfo, error) {
 	info, err := c.mc.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
 	if err != nil {
-		return ObjectInfo{}, err
+		return ObjectInfo{}, fmt.Errorf("stat object %s: %w", key, err)
 	}
 	return toObjectInfo(info), nil
 }
 
 func (c *Client) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string, meta map[string]string) error {
-	_, err := c.mc.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType, UserMetadata: meta})
-	return err
+	if _, err := c.mc.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType, UserMetadata: meta}); err != nil {
+		return fmt.Errorf("put object %s: %w", key, err)
+	}
+	return nil
 }
 
 func (c *Client) CopyObject(ctx context.Context, bucket, srcKey, dstKey string) error {
 	dst := minio.CopyDestOptions{Bucket: bucket, Object: dstKey}
 	src := minio.CopySrcOptions{Bucket: bucket, Object: srcKey}
-	_, err := c.mc.CopyObject(ctx, dst, src)
-	return err
+	if _, err := c.mc.CopyObject(ctx, dst, src); err != nil {
+		return fmt.Errorf("copy object %s to %s: %w", srcKey, dstKey, err)
+	}
+	return nil
 }
 
 // --- Multipart ---
@@ -214,7 +236,7 @@ func (c *Client) InitMultipart(ctx context.Context, bucket, key string, size, pa
 	core := minio.Core{Client: c.mc}
 	uploadID, err := core.NewMultipartUpload(ctx, bucket, key, minio.PutObjectOptions{})
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("init multipart %s: %w", key, err)
 	}
 	// At least one part: an empty file completes with a single empty part.
 	n := max(1, (size+partSize-1)/partSize)
@@ -235,7 +257,7 @@ func (c *Client) presignPartURL(ctx context.Context, bucket, key, uploadID strin
 	v.Set("partNumber", fmt.Sprintf("%d", partNum))
 	u, err := c.presign.Presign(ctx, "PUT", bucket, key, ttl, v)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("presign part %d of %s: %w", partNum, key, err)
 	}
 	return u.String(), nil
 }
@@ -251,13 +273,18 @@ func (c *Client) CompleteMultipart(ctx context.Context, bucket, key, uploadID st
 	for i, p := range parts {
 		cps[i] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
 	}
-	_, err := core.CompleteMultipartUpload(ctx, bucket, key, uploadID, cps, minio.PutObjectOptions{})
-	return err
+	if _, err := core.CompleteMultipartUpload(ctx, bucket, key, uploadID, cps, minio.PutObjectOptions{}); err != nil {
+		return fmt.Errorf("complete multipart %s: %w", key, err)
+	}
+	return nil
 }
 
 func (c *Client) AbortMultipart(ctx context.Context, bucket, key, uploadID string) error {
 	core := minio.Core{Client: c.mc}
-	return core.AbortMultipartUpload(ctx, bucket, key, uploadID)
+	if err := core.AbortMultipartUpload(ctx, bucket, key, uploadID); err != nil {
+		return fmt.Errorf("abort multipart %s: %w", key, err)
+	}
+	return nil
 }
 
 // ListIncompleteUploads returns the number of in-progress multipart

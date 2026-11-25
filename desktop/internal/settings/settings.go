@@ -160,7 +160,7 @@ func (st *Store) load() error {
 	// Try new multi-env format first.
 	d := diskDefaults()
 	if err := json.Unmarshal(b, &d); err != nil {
-		return err
+		return fmt.Errorf("parse settings %s: %w", st.path, err)
 	}
 
 	// Detect legacy flat format: no "environments" key means the old
@@ -168,7 +168,7 @@ func (st *Store) load() error {
 	if len(d.Environments) == 0 {
 		var old legacyFormat
 		if err := json.Unmarshal(b, &old); err != nil {
-			return err
+			return fmt.Errorf("parse legacy settings %s: %w", st.path, err)
 		}
 		url := old.APIURL
 		if url == "" {
@@ -283,7 +283,7 @@ func (st *Store) ListEnvironments() []string {
 func (st *Store) flush() error {
 	b, err := json.MarshalIndent(st.d, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("encode settings: %w", err)
 	}
 	tmp := st.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {

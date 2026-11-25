@@ -28,17 +28,25 @@ func NewStore(ds *docstore.Store) (*Store, error) {
 }
 
 func (s *Store) Create(sess fiberauth.RefreshSession) error {
-	return s.c.Insert(sess.ID, &sess)
+	if err := s.c.Insert(sess.ID, &sess); err != nil {
+		return fmt.Errorf("create refresh session: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Get(id string) (fiberauth.RefreshSession, error) {
 	var sess fiberauth.RefreshSession
-	err := s.c.Get(id, &sess)
-	return sess, err
+	if err := s.c.Get(id, &sess); err != nil {
+		return sess, fmt.Errorf("get refresh session: %w", err)
+	}
+	return sess, nil
 }
 
 func (s *Store) Delete(id string) error {
-	return s.c.Delete(id)
+	if err := s.c.Delete(id); err != nil {
+		return fmt.Errorf("delete refresh session: %w", err)
+	}
+	return nil
 }
 
 // ListByUID returns every stored session of uid, expired ones included.
@@ -73,7 +81,7 @@ func (s *Store) DeleteByUID(uid string) error {
 // Swap persists a rotated session only if the stored token is still
 // oldHash, so two concurrent refreshes can't both rotate.
 func (s *Store) Swap(next fiberauth.RefreshSession, oldHash string) error {
-	return s.c.Update(next.ID, func(raw []byte) ([]byte, error) {
+	err := s.c.Update(next.ID, func(raw []byte) ([]byte, error) {
 		var cur fiberauth.RefreshSession
 		if err := json.Unmarshal(raw, &cur); err != nil {
 			return nil, fmt.Errorf("decode refresh session: %w", err)
@@ -83,6 +91,10 @@ func (s *Store) Swap(next fiberauth.RefreshSession, oldHash string) error {
 		}
 		return json.Marshal(&next)
 	})
+	if err != nil {
+		return fmt.Errorf("swap refresh session: %w", err)
+	}
+	return nil
 }
 
 // PruneExpired deletes expired sessions and returns how many.

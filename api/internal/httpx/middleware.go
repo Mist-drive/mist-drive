@@ -21,7 +21,7 @@ func AuthMiddleware(secret string, bootTime time.Time, log *logger.Logger) fiber
 	})
 }
 
-func AdminOnly(c *fiber.Ctx) error { return fiberauth.AdminOnly(c) }
+func AdminOnly(c *fiber.Ctx) error { return fiberauth.AdminOnly(c) } //nolint:wrapcheck // fiber handler, error is the response
 
 func UID(c *fiber.Ctx) string { return fiberauth.UID(c) }
 

@@ -46,10 +46,10 @@ func (m *Mailer) SendFailedLogin(to, targetLogin, ip, ua string, count int64, at
 func (m *Mailer) send(to, subject, body string) error {
 	msg := mail.NewMsg()
 	if err := msg.From(m.cfg.SMTPFrom); err != nil {
-		return err
+		return fmt.Errorf("set mail from %q: %w", m.cfg.SMTPFrom, err)
 	}
 	if err := msg.To(to); err != nil {
-		return err
+		return fmt.Errorf("set mail to %q: %w", to, err)
 	}
 	msg.Subject(subject)
 	msg.SetBodyString(mail.TypeTextPlain, body)
@@ -80,7 +80,10 @@ func (m *Mailer) send(to, subject, body string) error {
 	}
 	client, err := mail.NewClient(m.cfg.SMTPHost, opts...)
 	if err != nil {
-		return err
+		return fmt.Errorf("create smtp client %s: %w", m.cfg.SMTPHost, err)
 	}
-	return client.DialAndSend(msg)
+	if err := client.DialAndSend(msg); err != nil {
+		return fmt.Errorf("send mail via %s:%d: %w", m.cfg.SMTPHost, port, err)
+	}
+	return nil
 }

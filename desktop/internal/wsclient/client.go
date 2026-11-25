@@ -81,14 +81,14 @@ func (c *Client) loop(ctx context.Context, wsURL, token string, insecureTLS bool
 	// Same TLS rule as apiclient: verify unless loopback. The JWT is sent
 	// as the first message, not in the URL.
 	httpc := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS}, //nolint:gosec // G402: loopback only
 	}}
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		survived := false
-		conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: httpc})
+		conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: httpc}) //nolint:bodyclose // websocket lib owns the handshake body
 		if err != nil {
 			c.log("ws dial: " + err.Error())
 		} else {
