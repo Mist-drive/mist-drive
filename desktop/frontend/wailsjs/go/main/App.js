@@ -110,10 +110,6 @@ export function SetBandwidthLimits(arg1, arg2) {
   return window['go']['main']['App']['SetBandwidthLimits'](arg1, arg2);
 }
 
-export function SetFolderDirections(arg1, arg2, arg3) {
-  return window['go']['main']['App']['SetFolderDirections'](arg1, arg2, arg3);
-}
-
 export function SetFolderEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetFolderEnabled'](arg1, arg2);
 }

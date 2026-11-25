@@ -316,12 +316,12 @@ func (a *App) ListFiles() (apiclient.ListResponse, error) {
 	return a.api.ListFiles()
 }
 
-// RenameFile renames a file or folder. If the path lives under an
-// upload-enabled sync folder, the rename is applied locally and the
+// RenameFile renames a file or folder. If the path lives under a
+// sync folder, the rename is applied locally and the
 // sync engine detects it — consistent with how DeleteFile works.
 // For files outside any sync folder the API rename is used directly.
 func (a *App) RenameFile(path, newName string) error {
-	if f, rel, ok := a.findUploadingFolderForKey(path); ok {
+	if f, rel, ok := a.findSyncFolderForKey(path); ok {
 		oldLocal := filepath.Join(f.Local, filepath.FromSlash(rel))
 		newLocal := filepath.Join(filepath.Dir(oldLocal), newName)
 		if err := os.Rename(oldLocal, newLocal); err != nil {
@@ -338,13 +338,12 @@ func (a *App) CreateFolder(path string) error {
 	return a.api.CreateFolder(path)
 }
 
-// DeleteFile removes a file. If the key lives under an upload-enabled
+// DeleteFile removes a file. If the key lives under a
 // sync folder, we delete the LOCAL copy and let the next reconcile pass
-// propagate the deletion to the remote — otherwise the engine would
-// just re-upload the file a few seconds later. For files outside any
+// propagate the deletion to the remote (and to other machines). For files outside any
 // sync folder we fall back to a direct API delete.
 func (a *App) DeleteFile(key string) error {
-	if f, rel, ok := a.findUploadingFolderForKey(key); ok {
+	if f, rel, ok := a.findSyncFolderForKey(key); ok {
 		local := filepath.Join(f.Local, filepath.FromSlash(rel))
 		if err := os.Remove(local); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove local: %w", err)
@@ -356,11 +355,11 @@ func (a *App) DeleteFile(key string) error {
 }
 
 // DeleteFolder mirrors DeleteFile's logic for recursive prefix deletes.
-// An upload-enabled sync folder whose RemotePrefix matches (or is
+// A sync folder whose RemotePrefix matches (or is
 // contained by) the given prefix has its local tree wiped; otherwise
 // the delete is forwarded to the API.
 func (a *App) DeleteFolder(prefix string) error {
-	if f, rel, ok := a.findUploadingFolderForKey(prefix); ok {
+	if f, rel, ok := a.findSyncFolderForKey(prefix); ok {
 		local := filepath.Join(f.Local, filepath.FromSlash(rel))
 		if err := os.RemoveAll(local); err != nil {
 			return fmt.Errorf("remove local dir: %w", err)
@@ -371,14 +370,13 @@ func (a *App) DeleteFolder(prefix string) error {
 	return a.api.DeleteFolder(prefix)
 }
 
-// findUploadingFolderForKey returns the sync folder whose RemotePrefix
-// is a prefix of `key`, provided that folder has Upload enabled (the
-// only mode where local is authoritative). The returned `rel` is the
+// findSyncFolderForKey returns the enabled sync folder whose RemotePrefix
+// is a prefix of `key`. The returned `rel` is the
 // key with the folder's prefix stripped, ready to be joined to Local.
-func (a *App) findUploadingFolderForKey(key string) (settings.SyncFolder, string, bool) {
+func (a *App) findSyncFolderForKey(key string) (settings.SyncFolder, string, bool) {
 	key = strings.TrimPrefix(key, "/")
 	for _, f := range a.settings.Get().Folders {
-		if !f.Enabled || !f.Upload {
+		if !f.Enabled {
 			continue
 		}
 		p := strings.TrimSuffix(f.RemotePrefix, "/")
@@ -680,7 +678,7 @@ func (a *App) AddSyncFolder() (settings.SyncFolder, error) {
 		}
 	}
 	prefix := uniquePrefix(filepath.Base(dir), s.Folders)
-	f := settings.SyncFolder{Local: dir, RemotePrefix: prefix, Upload: true, Download: false, Enabled: true}
+	f := settings.SyncFolder{Local: dir, RemotePrefix: prefix, Enabled: true}
 	s.Folders = append(s.Folders, f)
 	if err := a.settings.Save(s); err != nil {
 		return settings.SyncFolder{}, err
@@ -721,9 +719,13 @@ func (a *App) RemoveSyncFolder(index int) error {
 	if index < 0 || index >= len(s.Folders) {
 		return fmt.Errorf("invalid index %d", index)
 	}
+	removed := s.Folders[index]
 	s.Folders = append(s.Folders[:index], s.Folders[index+1:]...)
 	if err := a.settings.Save(s); err != nil {
 		return err
+	}
+	if err := syncpkg.ForgetFolder(s.APIURL, removed); err != nil {
+		return fmt.Errorf("forget sync state: %w", err)
 	}
 	// Force an immediate new pass so the engine drops fsnotify watchers
 	// for the removed folder and stops acting on it.
@@ -776,21 +778,6 @@ func (a *App) SetFolderEnabled(index int, enabled bool) error {
 		a.engine.Nudge()
 	}
 	return nil
-}
-
-// SetFolderDirections toggles the upload/download legs for a single
-// mapping. Per-folder rather than global so a user can back up one
-// tree while bidirectionally syncing another. Defaults are upload-only;
-// downloads stay opt-in so the first-ever run never surprises the user
-// by pulling down a huge remote tree.
-func (a *App) SetFolderDirections(index int, upload, download bool) error {
-	s := a.settings.Get()
-	if index < 0 || index >= len(s.Folders) {
-		return fmt.Errorf("invalid index %d", index)
-	}
-	s.Folders[index].Upload = upload
-	s.Folders[index].Download = download
-	return a.settings.Save(s)
 }
 
 // RecomputeUsage is the desktop equivalent of the web's "recompute

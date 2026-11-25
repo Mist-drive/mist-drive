@@ -532,15 +532,23 @@ func (c *Client) DownloadFile(key, destPath string) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(destPath)
+	// Write aside then rename: readers (e.g. an open KeePass DB) never see a
+	// half-written file. Suffix is skipped by the sync scanner.
+	tmp := destPath + ".mistpart"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	if _, err := io.Copy(f, res.Body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("download %s: %w", key, err)
 	}
-	return nil
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close %s: %w", tmp, err)
+	}
+	return os.Rename(tmp, destPath)
 }
 
 // DownloadFolder streams the API's zip endpoint for `prefix` directly

@@ -59,8 +59,6 @@ export function SaveSettings(arg1:settings.Settings):Promise<void>;
 
 export function SetBandwidthLimits(arg1:number,arg2:number):Promise<void>;
 
-export function SetFolderDirections(arg1:number,arg2:boolean,arg3:boolean):Promise<void>;
-
 export function SetFolderEnabled(arg1:number,arg2:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;

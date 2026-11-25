@@ -30,7 +30,7 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	st := newStoreAt(t, filepath.Join(dir, "settings.json"))
 	in := Settings{
 		APIURL:               "https://drive.example.com",
-		Folders:              []SyncFolder{{Local: "/tmp/x", RemotePrefix: "x/", Upload: true, Download: false, Enabled: true}},
+		Folders:              []SyncFolder{{Local: "/tmp/x", RemotePrefix: "x/", Enabled: true}},
 		MaxConcurrentUploads: 7,
 		MaxUploadRateKBps:    512,
 	}
@@ -46,7 +46,7 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if got.APIURL != in.APIURL || got.MaxConcurrentUploads != 7 || got.MaxUploadRateKBps != 512 {
 		t.Fatalf("roundtrip mismatch: %+v", got)
 	}
-	if len(got.Folders) != 1 || !got.Folders[0].Upload || got.Folders[0].Download || !got.Folders[0].Enabled {
+	if len(got.Folders) != 1 || !got.Folders[0].Enabled {
 		t.Fatalf("folders mismatch: %+v", got.Folders)
 	}
 }
@@ -150,7 +150,7 @@ func TestMultiEnvIsolation(t *testing.T) {
 	// Save settings for env A.
 	if err := st.Save(Settings{
 		APIURL:               "http://localhost:3000",
-		Folders:              []SyncFolder{{Local: "/tmp/dev", RemotePrefix: "dev/", Upload: true, Enabled: true}},
+		Folders:              []SyncFolder{{Local: "/tmp/dev", RemotePrefix: "dev/", Enabled: true}},
 		MaxConcurrentUploads: 2,
 	}); err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestMultiEnvIsolation(t *testing.T) {
 	// Save settings for env B.
 	if err := st.Save(Settings{
 		APIURL:               "https://drive.prod.com",
-		Folders:              []SyncFolder{{Local: "/tmp/prod", RemotePrefix: "prod/", Upload: true, Enabled: true}},
+		Folders:              []SyncFolder{{Local: "/tmp/prod", RemotePrefix: "prod/", Enabled: true}},
 		MaxConcurrentUploads: 8,
 	}); err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestMultiEnvIsolation(t *testing.T) {
 	// Switch back to A.
 	if err := st.Save(Settings{
 		APIURL:               "http://localhost:3000",
-		Folders:              []SyncFolder{{Local: "/tmp/dev", RemotePrefix: "dev/", Upload: true, Enabled: true}},
+		Folders:              []SyncFolder{{Local: "/tmp/dev", RemotePrefix: "dev/", Enabled: true}},
 		MaxConcurrentUploads: 2,
 	}); err != nil {
 		t.Fatal(err)

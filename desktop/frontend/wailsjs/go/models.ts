@@ -160,8 +160,6 @@ export namespace settings {
 	export class SyncFolder {
 	    local: string;
 	    remotePrefix: string;
-	    upload: boolean;
-	    download: boolean;
 	    enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -172,8 +170,6 @@ export namespace settings {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.local = source["local"];
 	        this.remotePrefix = source["remotePrefix"];
-	        this.upload = source["upload"];
-	        this.download = source["download"];
 	        this.enabled = source["enabled"];
 	    }
 	}

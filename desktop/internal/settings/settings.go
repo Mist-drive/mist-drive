@@ -23,12 +23,6 @@ import (
 type SyncFolder struct {
 	Local        string `json:"local"`        // absolute local path
 	RemotePrefix string `json:"remotePrefix"` // key prefix in the user's bucket
-	// Per-folder direction toggles. Defaults are upload-only so a fresh
-	// mapping behaves like a backup source — download is opt-in because
-	// accidentally pulling a huge remote tree is a worse first-time
-	// surprise than missing a file.
-	Upload   bool `json:"upload"`
-	Download bool `json:"download"`
 	// Enabled is the per-folder sync on/off switch. The engine loop
 	// itself runs as long as the user is logged in; each pass simply
 	// skips folders where Enabled is false. A settings file predating

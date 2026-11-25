@@ -272,7 +272,7 @@ function BandwidthForm({
 }
 
 const actionIcon: Record<string, string> = {
-  upload: '↑', download: '↓', delete: '✕', error: '!',
+  upload: '↑', download: '↓', delete: '✕', 'delete-local': '✕', conflict: '⚠', error: '!',
 }
 
 function HistoryModal({ entries, onClose }: { entries: sync.LogEntry[]; onClose: () => void }) {

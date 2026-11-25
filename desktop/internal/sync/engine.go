@@ -5,14 +5,15 @@
 // Design notes (phase 3 — pragmatic MVP):
 //   - One reconciler per mapping. Reconcile = list local, list remote,
 //     walk the union, act on differences.
-//   - No persistent index yet. The original plan called for a SQLite
-//     change-detection cache; for v1 we do full size-based compares on
-//     every pass. This is fine up to a few tens of thousands of files
-//     and keeps the code ~250 lines instead of ~800. The slot to add
-//     the index later is marked with [index hook].
-//   - Conflict rule: local wins. The moment a file differs in size
-//     between local and remote we push the local copy — matches the
-//     "last-writer-wins, local beats remote on tie" rule from the plan.
+//   - Always bidirectional, 3-way: each pass compares local (size+mtime)
+//     and remote (etag) to the base persisted at last sync (state.go),
+//     so it knows which side changed. Needed for several machines on
+//     one prefix: a stateless compare can't tell "deleted here" from
+//     "created elsewhere".
+//   - Conflict rule: keep both. If both sides changed, the local file is
+//     renamed "(conflict host date)" and the remote one downloaded.
+//   - Never mass-delete: an empty side with a non-empty base is treated
+//     as unmounted/broken, not as "user deleted everything".
 //   - fsnotify drives continuous reconciliation. Events are debounced
 //     (500ms) so a batch of writes coalesces into one pass. After a
 //     debounced burst we always re-reconcile the *whole* mapping; we
@@ -403,7 +404,7 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 		if !f.Enabled {
 			continue
 		}
-		e.reconcileOne(ctx, f, f.Upload, f.Download, remoteAll, gen)
+		e.reconcileOne(ctx, f, remoteAll, s.APIURL, gen)
 	}
 	e.mu.Lock()
 	e.status.LastPass = time.Now()
@@ -431,7 +432,11 @@ func (e *Engine) reconcileAll(ctx context.Context) {
 type localFile struct {
 	relPath string
 	size    int64
+	mtime   int64 // unix nano
 }
+
+// partSuffix marks an in-progress download (written then renamed), never synced.
+const partSuffix = ".mistpart"
 
 // scanLocal walks the mapping root and returns every regular file keyed
 // by its relative path (forward-slash separated so it matches S3 keys).
@@ -443,7 +448,7 @@ func scanLocal(root string) (map[string]localFile, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if d.IsDir() || strings.HasSuffix(p, partSuffix) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -455,16 +460,25 @@ func scanLocal(root string) (map[string]localFile, error) {
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", p, err)
 		}
-		out[rel] = localFile{relPath: rel, size: info.Size()}
+		out[rel] = localFile{relPath: rel, size: info.Size(), mtime: info.ModTime().UnixNano()}
 		return nil
 	})
 	return out, err
 }
 
-// reconcileOne performs one full pass for a single mapping. Per-file
-// errors are logged and counted but never abort the pass — a flaky
-// permission on one file should not stop the rest from syncing.
-func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUpload, doDownload bool, remoteAll []apiclient.ObjectInfo, gen uint64) {
+// effectiveSize is the uncompressed size when the server compressed the object.
+func effectiveSize(o apiclient.ObjectInfo) int64 {
+	if o.SourceSize > 0 {
+		return o.SourceSize
+	}
+	return o.Size
+}
+
+// reconcileOne performs one full 3-way pass for a single mapping: each
+// side is compared to the persisted base (state at last sync) so the
+// engine knows which side changed. Per-file errors are logged and
+// counted but never abort the pass.
+func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, remoteAll []apiclient.ObjectInfo, apiURL string, gen uint64) {
 	if _, err := os.Stat(f.Local); os.IsNotExist(err) {
 		if err := os.MkdirAll(f.Local, 0o755); err != nil {
 			e.recordErr(fmt.Errorf("mkdir %s: %w", f.Local, err))
@@ -493,58 +507,106 @@ func (e *Engine) reconcileOne(ctx context.Context, f settings.SyncFolder, doUplo
 		remote[rel] = o
 	}
 
-	// Walk the union. --- [index hook] ---
-	// A future SQLite index would let us skip this full re-scan by
-	// keeping a mirror of (rel_path, size, mtime, remote_etag) and
-	// only re-examining files fsnotify actually touched. For the
-	// current size of projects we sync, a full compare is fine.
-	seen := map[string]bool{}
-	// Sorted so uploads (and the pass notification naming the first file) are deterministic.
-	for _, rel := range slices.Sorted(maps.Keys(local)) {
-		lf := local[rel]
-		seen[rel] = true
-		if ctx.Err() != nil || e.st.Generation() != gen {
-			return
-		}
-		ro, ok := remote[rel]
-		remoteSize := ro.Size
-		if ro.SourceSize > 0 {
-			remoteSize = ro.SourceSize
-		}
-		if !ok || remoteSize != lf.size {
-			// Local-only or size-mismatch → upload (if enabled).
-			if !doUpload {
-				e.bumpSkipped()
-				continue
-			}
-			if err := e.upload(f, rel); err != nil {
-				e.recordErr(err)
-			}
-			continue
-		}
-		e.bumpSkipped()
+	stPath, err := statePath(apiURL, f.Local, f.RemotePrefix)
+	if err != nil {
+		e.recordErr(fmt.Errorf("sync state path: %w", err))
+		return
 	}
-	for _, rel := range slices.Sorted(maps.Keys(remote)) {
-		if seen[rel] {
-			continue
+	base, err := loadState(stPath)
+	if err != nil {
+		e.recordErr(fmt.Errorf("load sync state: %w", err))
+		return
+	}
+	defer func() {
+		// Settings changed mid-pass (folder maybe removed and its state
+		// forgotten): drop this pass's base, next pass re-derives it safely.
+		if e.st.Generation() != gen {
+			return
 		}
+		if err := saveState(stPath, base); err != nil {
+			e.recordErr(fmt.Errorf("save sync state: %w", err))
+		}
+	}()
+
+	// A whole side vanishing (unmounted drive, bad listing) must not be
+	// mirrored as a mass delete to the other side.
+	localWiped := len(local) == 0 && len(base) > 0
+	remoteWiped := len(remote) == 0 && len(base) > 0
+	if localWiped {
+		e.recordErr(fmt.Errorf("%s is empty but was synced before, not deleting remote files", f.Local))
+	}
+	if remoteWiped {
+		e.recordErr(fmt.Errorf("remote %s is empty but was synced before, not deleting local files", f.RemotePrefix))
+	}
+
+	keys := map[string]bool{}
+	for k := range local {
+		keys[k] = true
+	}
+	for k := range remote {
+		keys[k] = true
+	}
+	for k := range base {
+		keys[k] = true
+	}
+	// Sorted so actions (and the pass notification naming the first file) are deterministic.
+	for _, rel := range slices.Sorted(maps.Keys(keys)) {
 		if ctx.Err() != nil || e.st.Generation() != gen {
 			return
 		}
-		// Local is source of truth: a file present remotely but missing
-		// locally means the user deleted it, so mirror that deletion up.
-		if doUpload && !doDownload {
-			if err := e.deleteRemote(f, rel); err != nil {
-				e.recordErr(err)
+		lf, lok := local[rel]
+		ro, rok := remote[rel]
+		b, bok := base[rel]
+		// Adopt the remote etag without a transfer when the object is still
+		// what we synced: right after our upload (no etag returned) or after
+		// the server recompressed it (.jpg/.zip; SourceSize = original size).
+		// Otherwise a recompress would overwrite the local original.
+		if bok && rok && ro.ETag != b.ETag && effectiveSize(ro) == b.Size && (b.ETag == "" || ro.SourceSize > 0) {
+			b.ETag = ro.ETag
+			base[rel] = b
+		}
+		lChanged := lok && (!bok || lf.size != b.Size || lf.mtime != b.MTime)
+		rChanged := rok && (!bok || ro.ETag != b.ETag)
+
+		var err error
+		switch {
+		case lok && rok:
+			switch {
+			case !lChanged && !rChanged:
+				e.bumpSkipped()
+			case lChanged && !rChanged:
+				err = e.upload(f, lf, base)
+			case !lChanged && rChanged:
+				err = e.download(f, ro, rel, base)
+			case !bok && lf.size == effectiveSize(ro):
+				// First sight on both sides, same size: assume identical.
+				base[rel] = baseEntry{Size: lf.size, MTime: lf.mtime, ETag: ro.ETag}
+				e.bumpSkipped()
+			default:
+				err = e.conflict(f, ro, rel, base)
 			}
-			continue
+		case lok: // missing remotely
+			switch {
+			case bok && !lChanged && remoteWiped:
+				e.bumpSkipped()
+			case bok && !lChanged:
+				err = e.deleteLocal(f, rel, base)
+			default: // new locally, or edited after a remote delete (edit wins)
+				err = e.upload(f, lf, base)
+			}
+		case rok: // missing locally
+			switch {
+			case bok && !rChanged && localWiped:
+				e.bumpSkipped()
+			case bok && !rChanged:
+				err = e.deleteRemote(f, rel, base)
+			default: // new remotely, or edited after a local delete (edit wins)
+				err = e.download(f, ro, rel, base)
+			}
+		default: // gone on both sides
+			delete(base, rel)
 		}
-		// Both directions off — nothing to do.
-		if !doDownload {
-			e.bumpSkipped()
-			continue
-		}
-		if err := e.download(f, rel); err != nil {
+		if err != nil {
 			e.recordErr(err)
 		}
 	}
@@ -572,7 +634,8 @@ func remoteKey(f settings.SyncFolder, rel string) string {
 	return strings.TrimSuffix(f.RemotePrefix, "/") + "/" + rel
 }
 
-func (e *Engine) upload(f settings.SyncFolder, rel string) error {
+func (e *Engine) upload(f settings.SyncFolder, lf localFile, base map[string]baseEntry) error {
+	rel := lf.relPath
 	local := filepath.Join(f.Local, filepath.FromSlash(rel))
 	e.setInFlight("↑ " + rel)
 	s := e.st.Get()
@@ -580,6 +643,8 @@ func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("upload %s: %w", rel, err)
 	}
+	// Scan-time size/mtime: an edit during upload shows as changed next pass.
+	base[rel] = baseEntry{Size: lf.size, MTime: lf.mtime}
 	e.appendLog("upload", rel, "")
 	e.mu.Lock()
 	e.status.Uploaded++
@@ -589,19 +654,68 @@ func (e *Engine) upload(f settings.SyncFolder, rel string) error {
 	return nil
 }
 
-// deleteRemote mirrors a local deletion up to the server. Only called
-// from upload-only folders — see reconcileOne for the rationale.
-func (e *Engine) deleteRemote(f settings.SyncFolder, rel string) error {
+// deleteRemote mirrors a local deletion of a previously synced file.
+func (e *Engine) deleteRemote(f settings.SyncFolder, rel string, base map[string]baseEntry) error {
 	e.setInFlight("✕ " + rel)
 	if err := e.api.DeleteFile(remoteKey(f, rel)); err != nil {
 		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("delete remote %s: %w", rel, err)
 	}
+	delete(base, rel)
 	e.appendLog("delete", rel, "")
 	return nil
 }
 
-func (e *Engine) download(f settings.SyncFolder, rel string) error {
+// deleteLocal mirrors a remote deletion of a previously synced file.
+func (e *Engine) deleteLocal(f settings.SyncFolder, rel string, base map[string]baseEntry) error {
+	local, ok := safeLocalPath(f.Local, rel)
+	if !ok {
+		return fmt.Errorf("refusing unsafe local path: %s", rel)
+	}
+	e.setInFlight("✕ " + rel)
+	if err := os.Remove(local); err != nil && !os.IsNotExist(err) {
+		e.appendLog("error", rel, err.Error())
+		return fmt.Errorf("delete local %s: %w", rel, err)
+	}
+	delete(base, rel)
+	e.appendLog("delete-local", rel, "")
+	return nil
+}
+
+// conflict keeps both versions when each side changed since last sync:
+// the local file is renamed aside (and uploads next pass as a new file),
+// then the remote version is downloaded in its place. Nothing is lost.
+func (e *Engine) conflict(f settings.SyncFolder, ro apiclient.ObjectInfo, rel string, base map[string]baseEntry) error {
+	local, ok := safeLocalPath(f.Local, rel)
+	if !ok {
+		return fmt.Errorf("refusing unsafe local path: %s", rel)
+	}
+	aside := conflictName(local, hostname(), time.Now())
+	if err := os.Rename(local, aside); err != nil {
+		e.appendLog("error", rel, err.Error())
+		return fmt.Errorf("conflict rename %s: %w", rel, err)
+	}
+	e.appendLog("conflict", rel, "local copy kept as "+filepath.Base(aside))
+	return e.download(f, ro, rel, base)
+}
+
+// conflictName builds "name (conflict host 2006-01-02 150405).ext" next
+// to path (no colons: invalid on Windows).
+func conflictName(path, host string, now time.Time) string {
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	return fmt.Sprintf("%s (conflict %s %s)%s", stem, host, now.Format("2006-01-02 150405"), ext)
+}
+
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "unknown"
+	}
+	return h
+}
+
+func (e *Engine) download(f settings.SyncFolder, ro apiclient.ObjectInfo, rel string, base map[string]baseEntry) error {
 	// rel is derived from server-supplied object keys. Guard against a
 	// crafted key (e.g. containing "../") writing outside the sync folder.
 	local, ok := safeLocalPath(f.Local, rel)
@@ -619,6 +733,11 @@ func (e *Engine) download(f settings.SyncFolder, rel string) error {
 		e.appendLog("error", rel, err.Error())
 		return fmt.Errorf("download %s: %w", rel, err)
 	}
+	info, err := os.Stat(local)
+	if err != nil {
+		return fmt.Errorf("stat downloaded %s: %w", rel, err)
+	}
+	base[rel] = baseEntry{Size: info.Size(), MTime: info.ModTime().UnixNano(), ETag: ro.ETag}
 	e.appendLog("download", rel, "")
 	e.mu.Lock()
 	e.status.Downloaded++
